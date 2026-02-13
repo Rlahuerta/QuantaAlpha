@@ -138,6 +138,41 @@ CHAT_MODEL=deepseek-v3                         # or gpt-4, qwen-max, etc.
 REASONING_MODEL=deepseek-v3
 ```
 
+#### Ollama Cloud (LLM) + Local Ollama (Embeddings) Example
+
+```bash
+# Cloud chat/reasoning
+OPENAI_BASE_URL=https://ollama.com/v1
+OPENAI_API_KEY=<your_ollama_cloud_api_key>
+CHAT_MODEL=minimax-m2.5
+REASONING_MODEL=minimax-m2.5
+
+# Local embeddings
+EMBEDDING_BASE_URL=http://localhost:11434/v1
+EMBEDDING_API_KEY=ollama
+EMBEDDING_MODEL=mxbai-embed-large     # fallback: nomic-embed-text
+
+# Optional but recommended absolute data paths for factor execution
+FACTOR_CoSTEER_DATA_FOLDER=/abs/path/to/git_ignore_folder/factor_implementation_source_data
+FACTOR_CoSTEER_DATA_FOLDER_DEBUG=/abs/path/to/git_ignore_folder/factor_implementation_source_data_debug
+```
+
+#### Preflight Checklist (before mining)
+
+```bash
+# 1) Cloud model reachable
+curl -sS https://ollama.com/v1/models \
+  -H "Authorization: Bearer $OPENAI_API_KEY" | head
+
+# 2) Local embedding models available
+ollama list | grep -E "mxbai-embed-large|nomic-embed-text"
+
+# 3) Local embedding endpoint works
+curl -sS http://localhost:11434/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{"model":"mxbai-embed-large","input":"embedding smoke test"}' | head
+```
+
 ### 3. Prepare Data
 
 QuantaAlpha requires two types of data: **Qlib market data** (for backtesting) and **pre-computed price-volume HDF5 files** (for factor mining). We provide all of them on HuggingFace for convenience.

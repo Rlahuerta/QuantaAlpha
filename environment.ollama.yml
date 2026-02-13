@@ -28,10 +28,13 @@ variables:
   # Chat/Reasoning via Ollama Cloud (OpenAI-compatible endpoint)
   OPENAI_BASE_URL: https://ollama.com/v1
   OPENAI_API_KEY: <your_ollama_cloud_api_key>
-  CHAT_MODEL: gpt-oss:20b
-  REASONING_MODEL: gpt-oss:20b
+  CHAT_MODEL: minimax-m2.5
+  REASONING_MODEL: minimax-m2.5
 
   # Embeddings via local Ollama (run `ollama serve` and pull the model locally)
+  # Pull models once:
+  #   ollama pull mxbai-embed-large
+  #   ollama pull nomic-embed-text
   EMBEDDING_BASE_URL: http://localhost:11434/v1
   EMBEDDING_API_KEY: ollama
   EMBEDDING_MODEL: mxbai-embed-large

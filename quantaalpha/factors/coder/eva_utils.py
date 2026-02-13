@@ -12,7 +12,7 @@ from quantaalpha.factors.coder.factor import FactorTask
 from quantaalpha.core.experiment import Task, Workspace
 from quantaalpha.core.prompts import Prompts
 from quantaalpha.llm.config import LLM_SETTINGS
-from quantaalpha.llm.client import APIBackend
+from quantaalpha.llm.client import APIBackend, robust_json_parse
 
 evaluate_prompts = Prompts(file_path=Path(__file__).parent / "prompts.yaml")
 qa_evaluate_prompts = Prompts(file_path=Path(__file__).parent / "qa_prompts.yaml")
@@ -558,15 +558,14 @@ class FactorFinalDecisionEvaluator(FactorEvaluator):
         while attempts < max_attempts:
             try:
                 api = APIBackend() if attempts == 0 else APIBackend(use_chat_cache=False)
-                final_evaluation_dict = json.loads(
-                    api.build_messages_and_create_chat_completion(
-                        user_prompt=user_prompt,
-                        system_prompt=system_prompt,
-                        reasoning_flag=False,
-                        json_mode=True,
-                        seed=attempts,  # in case of useless retrying when cache enabled.
-                    ),
+                response_text = api.build_messages_and_create_chat_completion(
+                    user_prompt=user_prompt,
+                    system_prompt=system_prompt,
+                    reasoning_flag=False,
+                    json_mode=True,
+                    seed=attempts,  # in case of useless retrying when cache enabled.
                 )
+                final_evaluation_dict = robust_json_parse(response_text)
                 final_decision = final_evaluation_dict["final_decision"]
                 final_feedback = final_evaluation_dict["final_feedback"]
 
