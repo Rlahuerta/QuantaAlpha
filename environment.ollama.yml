@@ -1,0 +1,44 @@
+# QuantaAlpha local conda env for Ollama Cloud chat + local Ollama embeddings
+# Create:   conda env create -f environment.ollama.yml
+# Activate: conda activate quantaalpha-ollama
+# Then run once for CLI entrypoint: SETUPTOOLS_SCM_PRETEND_VERSION=0.1.0 pip install -e .
+
+name: quantaalpha-ollama
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.10
+  - pip>=24
+  - git
+  - nodejs>=20
+  - pip:
+      - -r requirements.txt
+      - -r requirements/test.txt
+      - -r requirements/lint.txt
+      - fastapi
+      - uvicorn
+      - websockets
+      - python-multipart
+
+variables:
+  CONDA_ENV_NAME: quantaalpha-ollama
+
+  # Chat/Reasoning via Ollama Cloud (OpenAI-compatible endpoint)
+  OPENAI_BASE_URL: https://ollama.com/v1
+  OPENAI_API_KEY: <your_ollama_cloud_api_key>
+  CHAT_MODEL: gpt-oss:20b
+  REASONING_MODEL: gpt-oss:20b
+
+  # Embeddings via local Ollama (run `ollama serve` and pull the model locally)
+  EMBEDDING_BASE_URL: http://localhost:11434/v1
+  EMBEDDING_API_KEY: ollama
+  EMBEDDING_MODEL: mxbai-embed-large
+
+  # QuantaAlpha runtime paths
+  QLIB_DATA_DIR: <path_to_qlib_cn_data>
+  DATA_RESULTS_DIR: <path_to_results>
+  USE_LOCAL: "True"
+  MAX_RETRY: "5"
+  RETRY_WAIT_SECONDS: "5"

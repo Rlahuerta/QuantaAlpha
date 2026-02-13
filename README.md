@@ -92,17 +92,29 @@
 
 ## 🚀 Quick Start
 
-### 1. Clone & Install
+### 1. Clone & Install (Conda)
 
 ```bash
 git clone https://github.com/QuantaAlpha/QuantaAlpha.git
 cd QuantaAlpha
+
+# If conda is not available in your shell yet, initialize it first (example path):
+# source ~/anaconda3/etc/profile.d/conda.sh
+
+# Recommended: create environment from the versioned conda config
+conda env create -f environment.ollama.yml
+conda activate quantaalpha-ollama
+
+# Install the package in development mode (required for `quantaalpha` CLI command)
+SETUPTOOLS_SCM_PRETEND_VERSION=0.1.0 pip install -e .
+```
+
+Minimal fallback (without the conda YAML):
+
+```bash
 conda create -n quantaalpha python=3.10
 conda activate quantaalpha
-# Install the package in development mode
 SETUPTOOLS_SCM_PRETEND_VERSION=0.1.0 pip install -e .
-
-# Install additional dependencies
 pip install -r requirements.txt
 ```
 
