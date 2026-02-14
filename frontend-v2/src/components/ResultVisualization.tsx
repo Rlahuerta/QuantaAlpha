@@ -25,11 +25,11 @@ export const ResultVisualization: React.FC<ResultVisualizationProps> = ({ result
     return (
       <Card>
         <CardHeader>
-          <CardTitle>📊 最终结果展示</CardTitle>
+          <CardTitle>📊 Final Results</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="flex h-[400px] items-center justify-center text-muted-foreground">
-            等待任务完成...
+            Waiting for task completion...
           </div>
         </CardContent>
       </Card>
@@ -37,22 +37,22 @@ export const ResultVisualization: React.FC<ResultVisualizationProps> = ({ result
   }
 
   const qualityData = [
-    { name: '高质量', value: result.qualityDistribution.high, fill: '#10B981' },
-    { name: '中等', value: result.qualityDistribution.medium, fill: '#F59E0B' },
-    { name: '低质量', value: result.qualityDistribution.low, fill: '#EF4444' },
+    { name: 'High quality', value: result.qualityDistribution.high, fill: '#10B981' },
+    { name: 'Medium', value: result.qualityDistribution.medium, fill: '#F59E0B' },
+    { name: 'Low quality', value: result.qualityDistribution.low, fill: '#EF4444' },
   ];
 
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>📊 最终结果展示</CardTitle>
+          <CardTitle>📊 Final Results</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             {/* Equity Curve */}
             <div>
-              <h4 className="mb-3 text-sm font-medium">净值曲线</h4>
+              <h4 className="mb-3 text-sm font-medium">Equity Curve</h4>
               <ResponsiveContainer width="100%" height={250}>
                 <AreaChart data={result.equityCurve}>
                   <defs>
@@ -78,7 +78,7 @@ export const ResultVisualization: React.FC<ResultVisualizationProps> = ({ result
                       borderRadius: '0.5rem',
                     }}
                     labelFormatter={(value) => formatDate(value)}
-                    formatter={(value: number) => [formatNumber(value, 2), '净值']}
+                    formatter={(value: number) => [formatNumber(value, 2), 'Equity']}
                   />
                   <Area
                     type="monotone"
@@ -93,7 +93,7 @@ export const ResultVisualization: React.FC<ResultVisualizationProps> = ({ result
 
             {/* Drawdown Curve */}
             <div>
-              <h4 className="mb-3 text-sm font-medium">回撤分析</h4>
+              <h4 className="mb-3 text-sm font-medium">Drawdown Analysis</h4>
               <ResponsiveContainer width="100%" height={250}>
                 <AreaChart data={result.drawdownCurve}>
                   <defs>
@@ -119,7 +119,7 @@ export const ResultVisualization: React.FC<ResultVisualizationProps> = ({ result
                       borderRadius: '0.5rem',
                     }}
                     labelFormatter={(value) => formatDate(value)}
-                    formatter={(value: number) => [formatPercent(value), '回撤']}
+                    formatter={(value: number) => [formatPercent(value), 'Drawdown']}
                   />
                   <Area
                     type="monotone"
@@ -134,7 +134,7 @@ export const ResultVisualization: React.FC<ResultVisualizationProps> = ({ result
 
             {/* IC Time Series */}
             <div>
-              <h4 className="mb-3 text-sm font-medium">IC 时序</h4>
+              <h4 className="mb-3 text-sm font-medium">IC Time Series</h4>
               <ResponsiveContainer width="100%" height={250}>
                 <LineChart data={result.icTimeSeries}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
@@ -166,7 +166,7 @@ export const ResultVisualization: React.FC<ResultVisualizationProps> = ({ result
 
             {/* Factor Quality Distribution */}
             <div>
-              <h4 className="mb-3 text-sm font-medium">因子质量分布</h4>
+              <h4 className="mb-3 text-sm font-medium">Factor Quality Distribution</h4>
               <ResponsiveContainer width="100%" height={250}>
                 <BarChart data={qualityData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
@@ -178,7 +178,7 @@ export const ResultVisualization: React.FC<ResultVisualizationProps> = ({ result
                       border: '1px solid #374151',
                       borderRadius: '0.5rem',
                     }}
-                    formatter={(value: number) => [value, '数量']}
+                    formatter={(value: number) => [value, 'Count']}
                   />
                   <Bar dataKey="value" radius={[8, 8, 0, 0]} />
                 </BarChart>
@@ -191,18 +191,18 @@ export const ResultVisualization: React.FC<ResultVisualizationProps> = ({ result
       {/* Factor List */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">🎯 生成因子列表 (Top 10)</CardTitle>
+          <CardTitle className="text-base">🎯 Generated Factors (Top 10)</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border">
-                  <th className="pb-2 text-left font-medium text-muted-foreground">因子名称</th>
-                  <th className="pb-2 text-left font-medium text-muted-foreground">质量</th>
+                  <th className="pb-2 text-left font-medium text-muted-foreground">Factor Name</th>
+                  <th className="pb-2 text-left font-medium text-muted-foreground">Quality</th>
                   <th className="pb-2 text-right font-medium text-muted-foreground">RankIC</th>
                   <th className="pb-2 text-right font-medium text-muted-foreground">RankICIR</th>
-                  <th className="pb-2 text-left font-medium text-muted-foreground">轮次</th>
+                  <th className="pb-2 text-left font-medium text-muted-foreground">Round</th>
                 </tr>
               </thead>
               <tbody>
@@ -226,7 +226,7 @@ export const ResultVisualization: React.FC<ResultVisualizationProps> = ({ result
                             : 'bg-destructive/20 text-destructive'
                         }`}
                       >
-                        {factor.quality === 'high' ? '高' : factor.quality === 'medium' ? '中' : '低'}
+                        {factor.quality === 'high' ? 'High' : factor.quality === 'medium' ? 'Medium' : 'Low'}
                       </span>
                     </td>
                     <td className="py-3 text-right font-mono">{formatNumber(factor.rankIc, 4)}</td>

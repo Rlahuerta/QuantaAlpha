@@ -17,9 +17,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSubmit, onStop, isRunnin
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const examplePrompts = [
-    '💹 挖掘动量类因子，关注短期反转和成交量配合',
-    '💰 探索价值成长组合，考虑行业中性化',
-    '📊 基于技术指标构建因子，重点RSI和MACD',
+    '💹 Mine momentum factors focused on short-term reversal and volume confirmation',
+    '💰 Explore value-growth combinations with industry neutrality',
+    '📊 Build factors from technical indicators, focusing on RSI and MACD',
   ];
 
   const handleSubmit = () => {
@@ -76,7 +76,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSubmit, onStop, isRunnin
                 <button
                   type="button"
                   onClick={() => setUseCustomMiningDirection((v) => !v)}
-                  title={useCustomMiningDirection ? '使用设置中的挖掘方向（已开）' : '使用设置中的挖掘方向（点击开启）'}
+                  title={useCustomMiningDirection ? 'Use mining directions from Settings (enabled)' : 'Use mining directions from Settings (click to enable)'}
                   className={`p-2 rounded-lg transition-all ${
                     useCustomMiningDirection
                       ? 'bg-primary/15 text-primary ring-1 ring-primary/30'
@@ -90,7 +90,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSubmit, onStop, isRunnin
                     useCustomMiningDirection ? 'text-primary font-medium' : 'text-muted-foreground'
                   }`}
                 >
-                  自选挖掘方向
+                  Custom mining direction
                 </span>
               </div>
               <div className="flex items-end gap-3">
@@ -102,10 +102,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSubmit, onStop, isRunnin
                     onKeyDown={handleKeyDown}
                     placeholder={
                       isRunning
-                        ? '实验运行中...可以切换到其他页面，任务不会中断'
+                        ? 'Experiment is running... you can switch pages without interrupting the task'
                         : useCustomMiningDirection
-                        ? '已开启自选挖掘方向，将使用「设置 → 挖掘方向」中的选项'
-                        : '描述因子挖掘需求，或开启「自选挖掘方向」使用设置中的方向 (Shift+Enter 换行，Enter 发送)'
+                        ? 'Custom mining direction is enabled; options from "Settings → Mining Directions" will be used'
+                        : 'Describe factor mining requirements, or enable "Custom mining direction" to use settings options (Shift+Enter for new line, Enter to send)'
                     }
                     disabled={isRunning}
                     className="w-full bg-transparent text-base placeholder:text-muted-foreground focus:outline-none resize-none"
@@ -119,7 +119,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSubmit, onStop, isRunnin
                     <button
                       onClick={onStop}
                       className="p-2.5 rounded-lg bg-red-500 text-white hover:bg-red-600 transition-all hover:scale-105 active:scale-95"
-                      title="中断实验"
+                      title="Stop experiment"
                     >
                       <Square className="h-5 w-5" />
                     </button>
@@ -128,7 +128,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSubmit, onStop, isRunnin
                       onClick={handleSubmit}
                       disabled={isRunning}
                       className="p-2.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-all hover:scale-105 active:scale-95"
-                      title="发送 (Enter)"
+                      title="Send (Enter)"
                     >
                       <Send className="h-5 w-5" />
                     </button>

@@ -30,9 +30,9 @@ export const InputPanel: React.FC<InputPanelProps> = ({ onSubmit, isRunning }) =
   };
 
   const examplePrompts = [
-    '请帮我挖掘动量类因子，重点关注短期反转效应和成交量配合',
-    '探索价值因子与成长因子的组合策略，考虑行业中性化',
-    '基于技术指标构建因子，重点关注RSI和MACD的组合',
+    'Help me mine momentum factors, focusing on short-term reversal and volume confirmation',
+    'Explore combined value and growth factor strategies with industry neutrality',
+    'Build factors from technical indicators, focusing on RSI and MACD combinations',
   ];
 
   return (
@@ -42,12 +42,12 @@ export const InputPanel: React.FC<InputPanelProps> = ({ onSubmit, isRunning }) =
           {/* Main input */}
           <div>
             <label className="mb-2 block text-sm font-medium">
-              💬 描述你的因子挖掘需求
+              💬 Describe your factor mining requirements
             </label>
             <Textarea
               value={userInput}
               onChange={(e) => setUserInput(e.target.value)}
-              placeholder="用自然语言描述你想要挖掘的因子类型、策略思路或研究方向..."
+              placeholder="Describe the factor types, strategy ideas, or research directions you want to mine in natural language..."
               className="min-h-[120px] resize-none text-base"
               disabled={isRunning}
             />
@@ -56,7 +56,7 @@ export const InputPanel: React.FC<InputPanelProps> = ({ onSubmit, isRunning }) =
           {/* Example prompts */}
           {!userInput && (
             <div className="space-y-2">
-              <p className="text-xs text-muted-foreground">💡 示例:</p>
+              <p className="text-xs text-muted-foreground">💡 Examples:</p>
               <div className="space-y-1">
                 {examplePrompts.map((prompt, idx) => (
                   <button
@@ -78,7 +78,7 @@ export const InputPanel: React.FC<InputPanelProps> = ({ onSubmit, isRunning }) =
               className="flex items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
             >
               <Settings className="h-4 w-4" />
-              高级配置
+              Advanced settings
               <span className="text-xs">
                 {showAdvanced ? '▲' : '▼'}
               </span>
@@ -88,7 +88,7 @@ export const InputPanel: React.FC<InputPanelProps> = ({ onSubmit, isRunning }) =
               <div className="mt-4 grid grid-cols-2 gap-4 rounded-md border border-border bg-secondary/20 p-4">
                 <div>
                   <label className="mb-1 block text-xs text-muted-foreground">
-                    并行方向数
+                    Parallel directions
                   </label>
                   <input
                     type="number"
@@ -104,7 +104,7 @@ export const InputPanel: React.FC<InputPanelProps> = ({ onSubmit, isRunning }) =
 
                 <div>
                   <label className="mb-1 block text-xs text-muted-foreground">
-                    进化轮次
+                    Evolution rounds
                   </label>
                   <input
                     type="number"
@@ -120,7 +120,7 @@ export const InputPanel: React.FC<InputPanelProps> = ({ onSubmit, isRunning }) =
 
                 <div>
                   <label className="mb-1 block text-xs text-muted-foreground">
-                    市场选择
+                    Market
                   </label>
                   <select
                     value={config.market}
@@ -129,7 +129,7 @@ export const InputPanel: React.FC<InputPanelProps> = ({ onSubmit, isRunning }) =
                     }
                     className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
                   >
-                    <option value="csi500">CSI 500 (中证500)</option>
+                    <option value="csi500">CSI 500</option>
                     <option value="sp500">S&P 500</option>
                   </select>
                 </div>
@@ -145,7 +145,7 @@ export const InputPanel: React.FC<InputPanelProps> = ({ onSubmit, isRunning }) =
                     className="h-4 w-4 rounded border-input"
                   />
                   <label htmlFor="qualityGate" className="text-xs text-muted-foreground">
-                    启用质量门控
+                    Enable quality gate
                   </label>
                 </div>
               </div>
@@ -164,10 +164,10 @@ export const InputPanel: React.FC<InputPanelProps> = ({ onSubmit, isRunning }) =
               {isRunning ? (
                 <>
                   <span className="mr-2 inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                  执行中...
+                  Running...
                 </>
               ) : (
-                <>🚀 开始执行</>
+                <>🚀 Start</>
               )}
             </Button>
           </div>

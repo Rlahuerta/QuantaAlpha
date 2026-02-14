@@ -114,26 +114,26 @@ export const LiveCharts: React.FC<LiveChartsProps> = ({
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 animate-fade-in-up">
           <StatCard
             icon={TrendingUp}
-            label={metrics.factorName ? `最佳因子年化收益 (${metrics.factorName.split('_').slice(0,2).join('_')}...)` : "最佳因子年化收益"}
+            label={metrics.factorName ? `Best factor annual return (${metrics.factorName.split('_').slice(0,2).join('_')}...)` : "Best factor annual return"}
             value={formatPercent(metrics.annualReturn)}
             trend={metrics.annualReturn}
             color="text-success"
           />
           <StatCard
             icon={Activity}
-            label="最佳因子RankIC"
+            label="Best factor RankIC"
             value={formatNumber(metrics.rankIc, 4)}
             color="text-primary"
           />
           <StatCard
             icon={BarChart3}
-            label="最佳因子夏普比率"
+            label="Best factor Sharpe ratio"
             value={formatNumber(metrics.sharpeRatio, 2)}
             color="text-warning"
           />
           <StatCard
             icon={Target}
-            label="最佳因子最大回撤"
+            label="Best factor max drawdown"
             value={formatPercent(metrics.maxDrawdown)}
             trend={metrics.maxDrawdown}
             color="text-destructive"
@@ -148,7 +148,7 @@ export const LiveCharts: React.FC<LiveChartsProps> = ({
         <Card className="glass card-hover animate-fade-in-left lg:col-span-4 h-[400px] flex flex-col">
           <CardHeader className="pb-3">
             <CardTitle className="text-base flex items-center gap-2">
-              实时日志
+              Live Logs
             </CardTitle>
           </CardHeader>
           <CardContent className="flex-1 min-h-0">
@@ -160,7 +160,7 @@ export const LiveCharts: React.FC<LiveChartsProps> = ({
             >
               {logs.length === 0 ? (
                 <div className="flex h-full items-center justify-center text-muted-foreground">
-                  等待日志输出...
+                  Waiting for logs...
                 </div>
               ) : (
                 <>

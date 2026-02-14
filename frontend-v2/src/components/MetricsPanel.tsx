@@ -54,11 +54,11 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({ metrics }) => {
     return (
       <Card className="h-full">
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">📈 实时回测结果</CardTitle>
+          <CardTitle className="text-base">📈 Real-time Backtest Results</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="flex h-[400px] items-center justify-center text-muted-foreground">
-            等待回测数据...
+            Waiting for backtest data...
           </div>
         </CardContent>
       </Card>
@@ -68,51 +68,51 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({ metrics }) => {
   return (
     <Card className="h-full">
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">📈 实时回测结果</CardTitle>
+        <CardTitle className="text-base">📈 Real-time Backtest Results</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         {/* IC Metrics */}
         <div>
-          <h4 className="mb-2 text-sm font-medium text-muted-foreground">IC 指标</h4>
+          <h4 className="mb-2 text-sm font-medium text-muted-foreground">IC Metrics</h4>
           <div className="grid grid-cols-2 gap-3">
             <MetricCard
               label="IC"
               value={formatNumber(metrics.ic, 4)}
-              description="信息系数"
+              description="Information coefficient"
             />
             <MetricCard
               label="ICIR"
               value={formatNumber(metrics.icir, 3)}
-              description="IC信息比率"
+              description="IC information ratio"
             />
             <MetricCard
               label="RankIC"
               value={formatNumber(metrics.rankIc, 4)}
-              description="秩相关系数"
+              description="Rank correlation coefficient"
             />
             <MetricCard
               label="RankICIR"
               value={formatNumber(metrics.rankIcir, 3)}
-              description="RankIC信息比率"
+              description="RankIC information ratio"
             />
           </div>
         </div>
 
         {/* Return Metrics */}
         <div>
-          <h4 className="mb-2 text-sm font-medium text-muted-foreground">收益指标</h4>
+          <h4 className="mb-2 text-sm font-medium text-muted-foreground">Return Metrics</h4>
           <div className="grid grid-cols-2 gap-3">
             <MetricCard
-              label="年化收益"
+              label="Annual return"
               value={formatPercent(metrics.annualReturn)}
               trend={metrics.annualReturn}
             />
             <MetricCard
-              label="夏普比率"
+              label="Sharpe ratio"
               value={formatNumber(metrics.sharpeRatio, 2)}
             />
             <MetricCard
-              label="最大回撤"
+              label="Max drawdown"
               value={formatPercent(metrics.maxDrawdown)}
               trend={metrics.maxDrawdown}
             />
@@ -121,25 +121,25 @@ export const MetricsPanel: React.FC<MetricsPanelProps> = ({ metrics }) => {
 
         {/* Factor Statistics */}
         <div>
-          <h4 className="mb-2 text-sm font-medium text-muted-foreground">因子统计</h4>
+          <h4 className="mb-2 text-sm font-medium text-muted-foreground">Factor Statistics</h4>
           <div className="rounded-lg border border-border bg-secondary/30 p-4">
             <div className="flex items-center justify-between">
               <div className="flex-1">
-                <p className="text-xs text-muted-foreground">总因子数</p>
+                <p className="text-xs text-muted-foreground">Total factors</p>
                 <p className="mt-1 text-2xl font-bold">{metrics.totalFactors}</p>
               </div>
               <div className="flex gap-4 text-xs">
                 <div className="text-center">
                   <div className="font-medium text-success">{metrics.highQualityFactors}</div>
-                  <div className="text-muted-foreground">高质量</div>
+                  <div className="text-muted-foreground">High quality</div>
                 </div>
                 <div className="text-center">
                   <div className="font-medium text-warning">{metrics.mediumQualityFactors}</div>
-                  <div className="text-muted-foreground">中等</div>
+                  <div className="text-muted-foreground">Medium</div>
                 </div>
                 <div className="text-center">
                   <div className="font-medium text-destructive">{metrics.lowQualityFactors}</div>
-                  <div className="text-muted-foreground">低质量</div>
+                  <div className="text-muted-foreground">Low quality</div>
                 </div>
               </div>
             </div>

@@ -13,9 +13,9 @@ export const FactorStatsRow: React.FC<FactorStatsRowProps> = ({ metrics, onBackt
   const qualityData = useMemo(() => {
     if (!metrics) return [];
     return [
-      { name: '高质量', value: metrics.highQualityFactors || 0, fill: '#10B981' },
-      { name: '中等', value: metrics.mediumQualityFactors || 0, fill: '#F59E0B' },
-      { name: '低质量', value: metrics.lowQualityFactors || 0, fill: '#EF4444' },
+      { name: 'High quality', value: metrics.highQualityFactors || 0, fill: '#10B981' },
+      { name: 'Medium', value: metrics.mediumQualityFactors || 0, fill: '#F59E0B' },
+      { name: 'Low quality', value: metrics.lowQualityFactors || 0, fill: '#EF4444' },
     ];
   }, [metrics]);
 
@@ -41,7 +41,7 @@ export const FactorStatsRow: React.FC<FactorStatsRowProps> = ({ metrics, onBackt
       {/* Total Factors Card */}
       <StatCard
          icon={Layers}
-         label="因子总数量"
+         label="Total factors"
          value={metrics ? metrics.totalFactors : 0}
          color="text-primary"
          className="shadow-lg border-primary/10"
@@ -51,9 +51,9 @@ export const FactorStatsRow: React.FC<FactorStatsRowProps> = ({ metrics, onBackt
          <StatCard
            key={item.name}
            icon={TrendingUp}
-           label={`${item.name}因子数量`}
+           label={`${item.name} factor count`}
            value={item.value}
-           color={item.name === '高质量' ? 'text-success' : item.name === '中等' ? 'text-warning' : 'text-destructive'}
+           color={item.name === 'High quality' ? 'text-success' : item.name === 'Medium' ? 'text-warning' : 'text-destructive'}
            className="shadow-lg border-primary/10"
          />
       ))}
@@ -66,7 +66,7 @@ export const FactorStatsRow: React.FC<FactorStatsRowProps> = ({ metrics, onBackt
           <div className="p-4 rounded-full bg-primary text-primary-foreground shadow-lg mb-3 z-10 group-hover:shadow-xl group-hover:bg-primary/90 transition-all duration-300">
             <BarChart3 className="h-6 w-6" />
           </div>
-          <div className="text-sm font-bold text-foreground/80 group-hover:text-primary transition-colors">一键回测</div>
+          <div className="text-sm font-bold text-foreground/80 group-hover:text-primary transition-colors">Quick Backtest</div>
        </div>
     </div>
   );

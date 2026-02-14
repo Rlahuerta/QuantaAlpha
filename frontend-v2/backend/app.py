@@ -53,7 +53,7 @@ app.add_middleware(
 
 class MiningStartRequest(BaseModel):
     """Request to start a factor mining experiment."""
-    direction: str = Field(..., description="Research direction, e.g. '价量因子挖掘'")
+    direction: str = Field(..., description="Research direction, e.g. 'price-volume factor mining'")
     numDirections: Optional[int] = Field(2, description="Parallel exploration directions")
     maxRounds: Optional[int] = Field(3, description="Evolution rounds")
     maxLoops: Optional[int] = Field(2, description="Iterations per direction")
@@ -283,7 +283,7 @@ async def _run_mining(task_id: str, req: MiningStartRequest):
 
         task["status"] = "running"
         task["progress"]["phase"] = "planning"
-        task["progress"]["message"] = "正在启动实验..."
+        task["progress"]["message"] = "Starting experiment..."
         task["updatedAt"] = _now()
 
         await _broadcast(task_id, {
@@ -342,9 +342,9 @@ async def _run_mining(task_id: str, req: MiningStartRequest):
                 new_phase = "analyzing"
             elif "factor_calculate" in line:
                 new_phase = "evolving"
-            elif "规划" in line or "planning" in line.lower():
+            elif "planning" in line.lower():
                 new_phase = "planning"
-            elif "进化完成" in line or "程序执行完成" in line:
+            elif "evolution completed" in line.lower() or "program execution completed" in line.lower():
                 new_phase = "completed"
 
             if new_phase != current_phase:
@@ -366,7 +366,7 @@ async def _run_mining(task_id: str, req: MiningStartRequest):
                     level = "error"
                 elif "WARNING" in line or "Warning" in line:
                     level = "warning"
-                elif "完成" in line or "success" in line.lower():
+                elif "completed" in line.lower() or "success" in line.lower():
                     level = "success"
 
                 log_entry = {
@@ -402,7 +402,7 @@ async def _run_mining(task_id: str, req: MiningStartRequest):
                     pass
             
             # Check for factor saving to update top factors list
-            if "已保存" in line or "因子" in line:
+            if "saved" in line.lower() or "factor" in line.lower():
                 _update_mining_metrics(task)
                 if task.get("metrics"):
                      await _broadcast(task_id, {
@@ -419,10 +419,10 @@ async def _run_mining(task_id: str, req: MiningStartRequest):
             task["status"] = "completed"
             task["progress"]["phase"] = "completed"
             task["progress"]["progress"] = 100
-            task["progress"]["message"] = "实验完成"
+            task["progress"]["message"] = "Experiment completed"
         else:
             task["status"] = "failed"
-            task["progress"]["message"] = f"实验失败 (exit code: {exit_code})"
+            task["progress"]["message"] = f"Experiment failed (exit code: {exit_code})"
 
         task["updatedAt"] = _now()
 
@@ -476,7 +476,7 @@ async def start_mining(req: MiningStartRequest):
             "currentRound": 0,
             "totalRounds": req.maxRounds or 3,
             "progress": 0,
-            "message": "正在初始化实验...",
+            "message": "Initializing experiment...",
             "timestamp": _now(),
         },
         "logs": [],
@@ -499,7 +499,7 @@ async def start_mining(req: MiningStartRequest):
     return ApiResponse(
         success=True,
         data={"taskId": task_id, "task": task},
-        message="实验已启动",
+        message="Experiment started",
     )
 
 
@@ -547,7 +547,7 @@ async def cancel_mining(task_id: str):
         "data": {"status": "cancelled"},
         "timestamp": _now(),
     })
-    return ApiResponse(success=True, message="任务已取消")
+    return ApiResponse(success=True, message="Task cancelled")
 
 
 @app.get("/api/v1/mining/tasks/list", response_model=ApiResponse)
@@ -713,7 +713,7 @@ async def warm_cache(
     else:
         jsons = _find_factor_jsons()
         if not jsons:
-            return ApiResponse(success=False, error="未找到因子库文件")
+            return ApiResponse(success=False, error="Factor library file not found")
         lib_path = jsons[0]
 
     if not Path(lib_path).exists():
@@ -724,14 +724,14 @@ async def warm_cache(
     # Build a clear message
     parts = []
     if result['synced']:
-        parts.append(f"新同步 {result['synced']} 个")
+        parts.append(f"Synced {result['synced']} new")
     if result.get('already_cached'):
-        parts.append(f"已有缓存 {result['already_cached']} 个")
+        parts.append(f"Already cached {result['already_cached']}")
     if result.get('no_source'):
-        parts.append(f"无H5源 {result['no_source']} 个(回测时从表达式计算)")
+        parts.append(f"No H5 source for {result['no_source']} (computed from expressions during backtest)")
     if result['failed']:
-        parts.append(f"失败 {result['failed']} 个")
-    msg = "，".join(parts) if parts else "无需操作"
+        parts.append(f"Failed {result['failed']}")
+    msg = ", ".join(parts) if parts else "No action needed"
     return ApiResponse(
         success=True,
         data=result,
@@ -782,7 +782,7 @@ async def start_backtest(req: BacktestStartRequest):
             "currentRound": 0,
             "totalRounds": 1,
             "progress": 0,
-            "message": "正在启动回测...",
+            "message": "Starting backtest...",
             "timestamp": _now(),
         },
         "logs": [],
@@ -799,7 +799,7 @@ async def start_backtest(req: BacktestStartRequest):
     return ApiResponse(
         success=True,
         data={"taskId": task_id, "task": task},
-        message="回测已启动",
+        message="Backtest started",
     )
 
 
@@ -830,7 +830,7 @@ async def cancel_backtest(task_id: str):
         "data": {"status": "cancelled"},
         "timestamp": _now(),
     })
-    return ApiResponse(success=True, message="回测已取消")
+    return ApiResponse(success=True, message="Backtest cancelled")
 
 
 async def _run_backtest(task_id: str, req: BacktestStartRequest, config_path: str):
@@ -936,7 +936,7 @@ async def _run_backtest(task_id: str, req: BacktestStartRequest, config_path: st
                 level = "error"
             elif "WARNING" in line or "Warning" in line:
                 level = "warning"
-            elif "完成" in line or "success" in line.lower() or "✓" in line:
+            elif "completed" in line.lower() or "success" in line.lower() or "✓" in line:
                 level = "success"
 
             log_entry = {
@@ -958,8 +958,9 @@ async def _run_backtest(task_id: str, req: BacktestStartRequest, config_path: st
             })
 
             # Update progress for meaningful lines
-            if any(kw in line for kw in ["因子", "回测", "模型", "训练", "完成", "加载",
-                                          "[1/4]", "[2/4]", "[3/4]", "[4/4]", "结果"]):
+            line_lower = line.lower()
+            if any(kw in line_lower for kw in ["factor", "backtest", "model", "train", "completed", "load",
+                                          "[1/4]", "[2/4]", "[3/4]", "[4/4]", "result"]):
                 task["progress"]["message"] = line[:200]
 
                 # Estimate progress from run_backtest step markers
@@ -971,7 +972,7 @@ async def _run_backtest(task_id: str, req: BacktestStartRequest, config_path: st
                     task["progress"]["progress"] = 55
                 elif "[4/4]" in line:
                     task["progress"]["progress"] = 75
-                elif "结果已保存" in line or "回测结果" in line:
+                elif "results saved" in line_lower or "backtest result" in line_lower:
                     task["progress"]["progress"] = 95
 
                 task["progress"]["timestamp"] = _now()
@@ -992,10 +993,10 @@ async def _run_backtest(task_id: str, req: BacktestStartRequest, config_path: st
         if exit_code == 0:
             task["progress"]["phase"] = "completed"
             task["progress"]["progress"] = 100
-            task["progress"]["message"] = "回测完成"
+            task["progress"]["message"] = "Backtest completed"
             _load_backtest_results(task)
         else:
-            task["progress"]["message"] = f"回测失败 (exit code: {exit_code})"
+            task["progress"]["message"] = f"Backtest failed (exit code: {exit_code})"
 
         await _broadcast(task_id, {
             "type": "result",
@@ -1127,7 +1128,7 @@ async def update_system_config(update: SystemConfigUpdate):
             content += f"\n{replacement}\n"
 
     DOTENV_PATH.write_text(content, encoding="utf-8")
-    return ApiResponse(success=True, message="配置已更新")
+    return ApiResponse(success=True, message="Configuration updated")
 
 
 # ---- WebSocket endpoint ----

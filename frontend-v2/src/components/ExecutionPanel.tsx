@@ -11,12 +11,12 @@ interface ExecutionPanelProps {
 }
 
 const phaseLabels: Record<string, string> = {
-  parsing: '🤔 解析需求',
-  planning: '📋 规划方向',
-  evolving: '🧬 进化中',
-  backtesting: '📊 回测中',
-  analyzing: '🔍 分析结果',
-  completed: '✅ 完成',
+  parsing: '🤔 Parse request',
+  planning: '📋 Plan directions',
+  evolving: '🧬 Evolving',
+  backtesting: '📊 Backtesting',
+  analyzing: '🔍 Analyze results',
+  completed: '✅ Completed',
 };
 
 const phaseColors: Record<string, 'default' | 'success' | 'warning'> = {
@@ -65,7 +65,7 @@ export const ExecutionPanel: React.FC<ExecutionPanelProps> = ({ progress, logs }
     <Card className="h-full">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
-          <CardTitle className="text-base">🔄 执行进度</CardTitle>
+          <CardTitle className="text-base">🔄 Execution Progress</CardTitle>
           <Badge variant={phaseColors[progress.phase]}>
             {phaseLabels[progress.phase]}
           </Badge>
@@ -87,15 +87,15 @@ export const ExecutionPanel: React.FC<ExecutionPanelProps> = ({ progress, logs }
         {/* Log Stream */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <h4 className="text-sm font-medium">实时日志</h4>
+            <h4 className="text-sm font-medium">Live Logs</h4>
             <span className="text-xs text-muted-foreground">
-              最近 {logs.length} 条
+              Last {logs.length} entries
             </span>
           </div>
           <div className="h-[300px] overflow-y-auto rounded-md border border-border bg-secondary/20 p-3 font-mono text-xs">
             {logs.length === 0 ? (
               <div className="flex h-full items-center justify-center text-muted-foreground">
-                等待日志输出...
+                Waiting for logs...
               </div>
             ) : (
               <div className="space-y-1">

@@ -30,12 +30,12 @@ export const MiningDashboardPage: React.FC<MiningDashboardPageProps> = ({ onNavi
         showNavigation={!!onNavigate}
       >
         <div className="flex flex-col items-center justify-center min-h-[60vh] animate-fade-in-up">
-          <p className="text-muted-foreground">当前无进行中的挖掘任务</p>
+          <p className="text-muted-foreground">No mining task is currently running</p>
           <button 
             className="mt-4 text-primary hover:underline"
             onClick={() => onNavigate?.('home')}
           >
-            返回主页
+            Back to Home
           </button>
         </div>
       </Layout>

@@ -30,7 +30,7 @@ export const FactorList: React.FC<FactorListProps> = ({ metrics }) => {
       <CardHeader className="pb-3">
         <CardTitle className="text-base flex items-center gap-2">
           <div className="h-2 w-2 rounded-full bg-purple-500 animate-pulse" />
-          当前因子库 RankIC Top 10
+          Current factor library RankIC Top 10
         </CardTitle>
       </CardHeader>
       <CardContent>
@@ -38,8 +38,8 @@ export const FactorList: React.FC<FactorListProps> = ({ metrics }) => {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border/50">
-                <th className="py-3 px-4 text-left font-medium text-muted-foreground w-1/6">因子名</th>
-                <th className="py-3 px-4 text-left font-medium text-muted-foreground w-1/4">公式</th>
+                <th className="py-3 px-4 text-left font-medium text-muted-foreground w-1/6">Factor</th>
+                <th className="py-3 px-4 text-left font-medium text-muted-foreground w-1/4">Expression</th>
                 <th className="py-3 px-4 text-right font-medium text-muted-foreground">IC</th>
                 <th className="py-3 px-4 text-right font-medium text-muted-foreground">RankIC</th>
                 <th className="py-3 px-4 text-right font-medium text-muted-foreground">ICIR</th>
@@ -94,19 +94,19 @@ export const FactorList: React.FC<FactorListProps> = ({ metrics }) => {
                         
                         <div className="grid grid-cols-2 gap-3 p-3 bg-background/40 rounded-lg border border-border/30">
                           <div>
-                            <span className="text-xs text-muted-foreground block mb-0.5">年化收益 (ARR)</span>
+                            <span className="text-xs text-muted-foreground block mb-0.5">Annual Return (ARR)</span>
                             <span className="font-bold text-success text-sm">{formatPercent(factor.annualReturn || 0)}</span>
                           </div>
                           <div>
-                            <span className="text-xs text-muted-foreground block mb-0.5">夏普比率 (Sharpe)</span>
+                            <span className="text-xs text-muted-foreground block mb-0.5">Sharpe Ratio</span>
                             <span className="font-bold text-sm">{formatNumber(factor.sharpeRatio || 0, 2)}</span>
                           </div>
                           <div>
-                            <span className="text-xs text-muted-foreground block mb-0.5">最大回撤 (MDD)</span>
+                            <span className="text-xs text-muted-foreground block mb-0.5">Max Drawdown (MDD)</span>
                             <span className="font-bold text-destructive text-sm">{formatPercent(factor.maxDrawdown || 0)}</span>
                           </div>
                           <div>
-                            <span className="text-xs text-muted-foreground block mb-0.5">卡玛比率 (CR)</span>
+                            <span className="text-xs text-muted-foreground block mb-0.5">Calmar Ratio (CR)</span>
                             <span className="font-bold text-primary text-sm">{formatNumber(factor.calmarRatio || 0, 2)}</span>
                           </div>
                         </div>
@@ -118,7 +118,7 @@ export const FactorList: React.FC<FactorListProps> = ({ metrics }) => {
               ) : (
                 <tr>
                   <td colSpan={9} className="py-8 text-center text-muted-foreground">
-                    暂无因子数据
+                    No factor data yet
                   </td>
                 </tr>
               )}

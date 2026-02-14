@@ -233,8 +233,8 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         const direction =
           config.useCustomMiningDirection
-            ? (getDefaultMiningDirection() || '价量因子挖掘')
-            : (config.userInput && config.userInput.trim()) || getDefaultMiningDirection() || '价量因子挖掘';
+            ? (getDefaultMiningDirection() || 'price-volume factor mining')
+            : (config.userInput && config.userInput.trim()) || getDefaultMiningDirection() || 'price-volume factor mining';
         const resp = await apiStartMining({
           direction,
           numDirections: config.numDirections || defaults.defaultNumDirections || 2,
@@ -309,7 +309,7 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
           currentRound: 0,
           totalRounds: config.maxRounds || 7,
           progress: 0,
-          message: '正在解析用户需求...',
+          message: 'Parsing user request...',
           timestamp: new Date().toISOString(),
         },
         logs: [],
@@ -328,12 +328,12 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
       let round = 1;
 
       const logMessages: Record<string, string[]> = {
-        parsing: ['解析需求关键词...', '识别策略类型...', '生成研究方向...'],
-        planning: ['规划探索路径...', '初始化进化框架...', '准备种子因子...'],
-        evolving: ['生成因子假设...', '构建表达式...', '计算因子值...', '评估质量...'],
-        backtesting: ['执行回测计算...', '计算IC指标...', '评估收益曲线...', '分析因子质量...'],
-        analyzing: ['综合分析结果...', '生成评估报告...', '优化因子组合...'],
-        completed: ['任务完成!', '结果已生成!'],
+        parsing: ['Parsing request keywords...', 'Identifying strategy type...', 'Generating research directions...'],
+        planning: ['Planning exploration paths...', 'Initializing evolution framework...', 'Preparing seed factors...'],
+        evolving: ['Generating factor hypotheses...', 'Constructing expressions...', 'Computing factor values...', 'Evaluating quality...'],
+        backtesting: ['Running backtest calculations...', 'Calculating IC metrics...', 'Evaluating return curves...', 'Analyzing factor quality...'],
+        analyzing: ['Synthesizing results...', 'Generating evaluation report...', 'Optimizing factor portfolio...'],
+        completed: ['Task completed!', 'Results generated!'],
       };
 
       const interval = setInterval(() => {

@@ -239,7 +239,7 @@ export const BacktestPage: React.FC = () => {
       const resp = await warmCache(selectedLibrary);
       if (resp.success) {
         // Use the detailed message from backend
-        setWarmCacheResult(resp.message || '完成');
+        setWarmCacheResult(resp.message || 'Done');
       }
       // Refresh cache status
       const cs = await getCacheStatus(selectedLibrary);
@@ -247,7 +247,7 @@ export const BacktestPage: React.FC = () => {
         setCacheStatus(cs.data as unknown as CacheStatusResponse);
       }
     } catch (err: any) {
-      setWarmCacheResult(`预热失败: ${err.message}`);
+      setWarmCacheResult(`Warm-up failed: ${err.message}`);
     }
     setWarmingCache(false);
   };
@@ -275,10 +275,10 @@ export const BacktestPage: React.FC = () => {
       <div>
         <h1 className="text-3xl font-bold flex items-center gap-3">
           <BarChart3 className="h-8 w-8 text-primary" />
-          独立回测
+          Independent Backtest
         </h1>
         <p className="text-muted-foreground mt-1">
-          使用因子库进行全周期回测评估
+          Run full-period backtest evaluation using a factor library
         </p>
       </div>
 
@@ -289,13 +289,13 @@ export const BacktestPage: React.FC = () => {
             <Info className="h-5 w-5 text-primary flex-shrink-0 mt-0.5" />
             <div className="text-sm space-y-1">
               <p className="text-muted-foreground">
-                独立回测在<strong className="text-foreground">测试集（2022-01-01 ~ 2025-12-26）</strong>上评估因子的样本外表现。
-                使用 CSI300 市场股票池，TopK Dropout 策略，LightGBM 模型。
+                Independent backtesting evaluates out-of-sample factor performance on the <strong className="text-foreground">test set (2022-01-01 ~ 2025-12-26)</strong>.
+                Uses the CSI300 stock universe, TopK Dropout strategy, and LightGBM model.
               </p>
               <p className="text-muted-foreground">
-                <strong className="text-foreground">custom</strong> 模式仅使用因子库中的自定义因子；
-                <strong className="text-foreground">combined</strong> 模式将自定义因子与 Alpha158(20) 基线因子组合使用。
-                回测仅使用已缓存的因子，未缓存因子将自动跳过。
+                <strong className="text-foreground">custom</strong> mode uses only custom factors from the factor library;
+                <strong className="text-foreground">combined</strong> mode combines custom factors with Alpha158(20) baseline factors.
+                Backtest uses only cached factors; uncached factors are skipped automatically.
               </p>
             </div>
           </div>
@@ -308,7 +308,7 @@ export const BacktestPage: React.FC = () => {
           <CardContent className="p-4 flex items-center gap-3">
             <AlertCircle className="h-5 w-5 text-destructive" />
             <span className="text-sm text-destructive">
-              后端服务未连接。请先启动后端：<code className="bg-secondary px-2 py-0.5 rounded">cd frontend-v2 && bash start.sh</code>
+              Backend service is not connected. Start backend first:<code className="bg-secondary px-2 py-0.5 rounded">cd frontend-v2 && bash start.sh</code>
             </span>
           </CardContent>
         </Card>
@@ -319,14 +319,14 @@ export const BacktestPage: React.FC = () => {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <FileText className="h-5 w-5" />
-            回测配置
+            Backtest Configuration
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Factor Library Selection */}
             <div>
-              <label className="block text-sm font-medium mb-2">因子库 JSON</label>
+              <label className="block text-sm font-medium mb-2">Factor Library JSON</label>
               <div className="flex gap-2">
                 <div className="relative flex-1">
                   <select
@@ -336,7 +336,7 @@ export const BacktestPage: React.FC = () => {
                     className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary transition-all appearance-none pr-10"
                   >
                     {libraries.length === 0 && (
-                      <option value="">暂无因子库文件</option>
+                      <option value="">No factor library files available</option>
                     )}
                     {libraries.map(lib => (
                       <option key={lib} value={lib}>{lib}</option>
@@ -349,20 +349,20 @@ export const BacktestPage: React.FC = () => {
                   size="sm"
                   onClick={loadLibraries}
                   disabled={libsLoading}
-                  title="刷新因子库列表"
+                  title="Refresh factor library list"
                   className="px-2.5 self-center"
                 >
                   <RefreshCw className={`h-4 w-4 ${libsLoading ? 'animate-spin' : ''}`} />
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                包含 {factorCount} 个因子
+                Contains {factorCount} factors
               </p>
             </div>
 
             {/* Factor Source */}
             <div>
-              <label className="block text-sm font-medium mb-2">因子源类型</label>
+              <label className="block text-sm font-medium mb-2">Factor Source Type</label>
               <div className="flex gap-3">
                 <button
                   onClick={() => setFactorSource('custom')}
@@ -374,7 +374,7 @@ export const BacktestPage: React.FC = () => {
                   }`}
                 >
                   Custom
-                  <span className="block text-xs font-normal mt-0.5">仅自定义因子</span>
+                  <span className="block text-xs font-normal mt-0.5">Custom factors only</span>
                 </button>
                 <button
                   onClick={() => setFactorSource('combined')}
@@ -386,7 +386,7 @@ export const BacktestPage: React.FC = () => {
                   }`}
                 >
                   Combined
-                  <span className="block text-xs font-normal mt-0.5">自定义 + Alpha158(20)</span>
+                  <span className="block text-xs font-normal mt-0.5">Custom + Alpha158(20)</span>
                 </button>
               </div>
             </div>
@@ -398,7 +398,7 @@ export const BacktestPage: React.FC = () => {
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2 text-sm font-medium">
                   <Database className="h-4 w-4 text-primary" />
-                  因子缓存状态
+                  Factor Cache Status
                 </div>
                 <div className="flex items-center gap-2">
                   {warmCacheResult && (
@@ -415,24 +415,24 @@ export const BacktestPage: React.FC = () => {
                     ) : (
                       <RefreshCw className="h-3 w-3 mr-1" />
                     )}
-                    同步缓存
+                    Sync Cache
                   </Button>
                 </div>
               </div>
               {cacheLoading ? (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Loader2 className="h-3 w-3 animate-spin" />
-                  正在检查缓存状态...
+                  Checking cache status...
                 </div>
               ) : cacheStatus ? (
                 <div className="space-y-2">
                   {/* Summary bar */}
                   <div className="flex items-center gap-3 text-xs flex-wrap">
-                    <span className="text-muted-foreground">共 {cacheStatus.total} 个因子</span>
+                    <span className="text-muted-foreground">Total {cacheStatus.total} factors</span>
                     {(cacheStatus.h5_cached + cacheStatus.md5_cached) > 0 && (
                       <span className="flex items-center gap-1 text-green-500">
                         <CheckCircle2 className="h-3 w-3" />
-                        已缓存: {cacheStatus.h5_cached + cacheStatus.md5_cached}
+                        Cached: {cacheStatus.h5_cached + cacheStatus.md5_cached}
                         <span className="text-muted-foreground font-normal">
                           (HDF5 {cacheStatus.h5_cached} + MD5 {cacheStatus.md5_cached})
                         </span>
@@ -441,7 +441,7 @@ export const BacktestPage: React.FC = () => {
                     {cacheStatus.need_compute > 0 && (
                       <span className="flex items-center gap-1 text-muted-foreground/70">
                         <AlertCircle className="h-3 w-3" />
-                        未缓存: {cacheStatus.need_compute}（将跳过）
+                        Uncached: {cacheStatus.need_compute} (will be skipped)
                       </span>
                     )}
                   </div>
@@ -452,25 +452,25 @@ export const BacktestPage: React.FC = () => {
                         <div
                           className="h-full bg-green-500 transition-all"
                           style={{ width: `${(cacheStatus.h5_cached / cacheStatus.total) * 100}%` }}
-                          title={`HDF5 缓存: ${cacheStatus.h5_cached}`}
+                          title={`HDF5 cache: ${cacheStatus.h5_cached}`}
                         />
                         <div
                           className="h-full bg-blue-500 transition-all"
                           style={{ width: `${(cacheStatus.md5_cached / cacheStatus.total) * 100}%` }}
-                          title={`MD5 缓存: ${cacheStatus.md5_cached}`}
+                          title={`MD5 cache: ${cacheStatus.md5_cached}`}
                         />
                         <div
                           className="h-full bg-muted-foreground/20 transition-all"
                           style={{ width: `${(cacheStatus.need_compute / cacheStatus.total) * 100}%` }}
-                          title={`未缓存（跳过）: ${cacheStatus.need_compute}`}
+                          title={`Uncached (skipped): ${cacheStatus.need_compute}`}
                         />
                       </>
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground">
                     {cacheStatus.need_compute === 0
-                      ? '所有因子已缓存，回测将快速执行'
-                      : `将使用 ${cacheStatus.h5_cached + cacheStatus.md5_cached} 个已缓存因子进行回测，${cacheStatus.need_compute} 个未缓存因子已自动跳过`}
+                      ? 'All factors are cached; backtest will run quickly'
+                      : `Backtest will use ${cacheStatus.h5_cached + cacheStatus.md5_cached} cached factors; ${cacheStatus.need_compute} uncached factors were skipped automatically`}
                   </p>
                 </div>
               ) : null}
@@ -480,16 +480,16 @@ export const BacktestPage: React.FC = () => {
           {/* Fixed display fields */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-border/50">
             <div className="text-sm">
-              <span className="text-muted-foreground">市场：</span>
-              <span className="font-medium ml-1">CSI 300（沪深300）</span>
+              <span className="text-muted-foreground">Market:</span>
+              <span className="font-medium ml-1">CSI 300</span>
             </div>
             <div className="text-sm">
-              <span className="text-muted-foreground">回测区间：</span>
+              <span className="text-muted-foreground">Backtest period:</span>
               <span className="font-medium ml-1">2022-01-01 ~ 2025-12-26</span>
             </div>
             <div className="text-sm">
-              <span className="text-muted-foreground">基准：</span>
-              <span className="font-medium ml-1">SH000300（沪深300指数）</span>
+              <span className="text-muted-foreground">Benchmark:</span>
+              <span className="font-medium ml-1">SH000300 (CSI 300 Index)</span>
             </div>
           </div>
 
@@ -498,7 +498,7 @@ export const BacktestPage: React.FC = () => {
             {isRunning ? (
               <Button variant="outline" onClick={handleCancel}>
                 <Square className="h-4 w-4 mr-2" />
-                停止回测
+                Stop Backtest
               </Button>
             ) : (
               <Button
@@ -511,7 +511,7 @@ export const BacktestPage: React.FC = () => {
                 ) : (
                   <Play className="h-4 w-4 mr-2" />
                 )}
-                开始回测
+                Start Backtest
               </Button>
             )}
           </div>
@@ -536,7 +536,7 @@ export const BacktestPage: React.FC = () => {
                 ) : (
                   <Clock className="h-5 w-5" />
                 )}
-                回测进度
+                Backtest Progress
               </div>
               <Badge
                 variant={
@@ -545,10 +545,10 @@ export const BacktestPage: React.FC = () => {
                   task.status === 'failed' ? 'destructive' : 'outline'
                 }
               >
-                {task.status === 'running' ? '运行中' :
-                 task.status === 'completed' ? '已完成' :
-                 task.status === 'failed' ? '失败' :
-                 task.status === 'cancelled' ? '已取消' : task.status}
+                {task.status === 'running' ? 'Running' :
+                 task.status === 'completed' ? 'Completed' :
+                 task.status === 'failed' ? 'Failed' :
+                 task.status === 'cancelled' ? 'Cancelled' : task.status}
               </Badge>
             </CardTitle>
           </CardHeader>
@@ -559,10 +559,10 @@ export const BacktestPage: React.FC = () => {
                 <Loader2 className="h-5 w-5 text-primary animate-spin flex-shrink-0" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-primary">
-                    回测正在执行中
+                    Backtest is running
                   </p>
                   <p className="text-xs text-muted-foreground truncate">
-                    {task.progress?.message || '正在加载因子数据并训练模型...'}
+                    {task.progress?.message || 'Loading factor data and training model...'}
                   </p>
                 </div>
               </div>
@@ -571,12 +571,12 @@ export const BacktestPage: React.FC = () => {
             {/* Progress bar */}
             <div className="mb-4">
               <div className="flex justify-between text-sm mb-1">
-                <span className="text-muted-foreground">{task.progress?.message || '等待中...'}</span>
+                <span className="text-muted-foreground">{task.progress?.message || 'Waiting...'}</span>
                 <span className="text-muted-foreground">
                   {task.status === 'completed' ? '100%' :
-                   task.status === 'failed' ? '失败' :
+                   task.status === 'failed' ? 'Failed' :
                    task.progress?.progress > 0 ? `${Math.round(task.progress.progress)}%` :
-                   isRunning ? '运行中...' : ''}
+                   isRunning ? 'Running...' : ''}
                 </span>
               </div>
               <div className="h-2 bg-secondary rounded-full overflow-hidden">
@@ -608,10 +608,10 @@ export const BacktestPage: React.FC = () => {
 
             {/* Task info */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs text-muted-foreground">
-              <div>任务 ID: <span className="font-mono text-foreground">{task.taskId}</span></div>
-              <div>开始时间: {new Date(task.createdAt).toLocaleTimeString()}</div>
-              <div>因子库: {task.config?.factorJson || selectedLibrary}</div>
-              <div>因子源: {task.config?.factorSource || factorSource}</div>
+              <div>Task ID: <span className="font-mono text-foreground">{task.taskId}</span></div>
+              <div>Start time: {new Date(task.createdAt).toLocaleTimeString()}</div>
+              <div>Factor library: {task.config?.factorJson || selectedLibrary}</div>
+              <div>Factor source: {task.config?.factorSource || factorSource}</div>
             </div>
           </CardContent>
         </Card>
@@ -624,11 +624,11 @@ export const BacktestPage: React.FC = () => {
             <CardTitle className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <TrendingUp className="h-5 w-5 text-green-500" />
-                回测结果
+                Backtest Results
               </div>
               {metrics.__num_factors != null && (
                 <span className="text-xs text-muted-foreground font-normal">
-                  {metrics.__num_factors} 个因子 · 耗时 {metrics.__elapsed_seconds != null ? `${Math.round(metrics.__elapsed_seconds)}s` : '--'}
+                  {metrics.__num_factors} factors · elapsed {metrics.__elapsed_seconds != null ? `${Math.round(metrics.__elapsed_seconds)}s` : '--'}
                 </span>
               )}
             </CardTitle>
@@ -640,16 +640,16 @@ export const BacktestPage: React.FC = () => {
               <MetricCard label="Rank IC" value={metrics['Rank IC'] || metrics.RankIC || metrics.rankIc} />
               <MetricCard label="Rank ICIR" value={metrics['Rank ICIR'] || metrics.RankICIR || metrics.rankIcir} />
               <MetricCard
-                label="年化扣费收益"
+                label="Annualized return after cost"
                 value={metrics.annualized_return != null ? (metrics.annualized_return * 100) : undefined}
                 unit="%"
               />
               <MetricCard
-                label="最大回撤"
+                label="Max drawdown"
                 value={metrics.max_drawdown != null ? (metrics.max_drawdown * 100) : undefined}
                 unit="%"
               />
-              <MetricCard label="信息比率" value={metrics.information_ratio} />
+              <MetricCard label="Information ratio" value={metrics.information_ratio} />
               <MetricCard label="Calmar" value={metrics.calmar_ratio} />
             </div>
 
@@ -658,7 +658,7 @@ export const BacktestPage: React.FC = () => {
               <div className="pt-4 border-t border-border/50">
                 <h4 className="text-sm font-medium mb-4 flex items-center gap-2">
                   <TrendingUp className="h-4 w-4 text-primary" />
-                  超额累计收益曲线
+                  Cumulative excess return curve
                 </h4>
                 <CumulativeReturnChart data={metrics.cumulative_curve} />
               </div>
@@ -674,10 +674,10 @@ export const BacktestPage: React.FC = () => {
             <CardTitle className="flex items-center justify-between">
               <span className="flex items-center gap-2">
                 <FileText className="h-5 w-5" />
-                运行日志
+                Runtime Logs
               </span>
               <span className="text-xs text-muted-foreground font-normal">
-                {logs.length} 条日志
+                {logs.length} log entries
               </span>
             </CardTitle>
           </CardHeader>
@@ -686,7 +686,7 @@ export const BacktestPage: React.FC = () => {
               {logs.length === 0 && isRunning && (
                 <div className="text-muted-foreground flex items-center gap-2">
                   <Loader2 className="h-3 w-3 animate-spin" />
-                  等待日志输出...
+                  Waiting for logs...
                 </div>
               )}
               {logs.map((log) => (

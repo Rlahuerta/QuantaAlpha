@@ -9,12 +9,12 @@ interface ProgressSidebarProps {
 }
 
 const phaseConfig = {
-  parsing: { icon: Sparkles, label: '解析需求', color: 'text-blue-400' },
-  planning: { icon: Brain, label: '规划方向', color: 'text-purple-400' },
-  evolving: { icon: TrendingUp, label: '进化中', color: 'text-yellow-400' },
-  backtesting: { icon: TrendingUp, label: '回测中', color: 'text-green-400' },
-  analyzing: { icon: Brain, label: '分析结果', color: 'text-cyan-400' },
-  completed: { icon: CheckCircle2, label: '完成', color: 'text-success' },
+  parsing: { icon: Sparkles, label: 'Parse request', color: 'text-blue-400' },
+  planning: { icon: Brain, label: 'Plan directions', color: 'text-purple-400' },
+  evolving: { icon: TrendingUp, label: 'Evolving', color: 'text-yellow-400' },
+  backtesting: { icon: TrendingUp, label: 'Backtesting', color: 'text-green-400' },
+  analyzing: { icon: Brain, label: 'Analyze results', color: 'text-cyan-400' },
+  completed: { icon: CheckCircle2, label: 'Completed', color: 'text-success' },
 };
 
 export const ProgressSidebar: React.FC<ProgressSidebarProps> = ({ progress }) => {
@@ -54,7 +54,7 @@ export const ProgressSidebar: React.FC<ProgressSidebarProps> = ({ progress }) =>
       {/* Timeline */}
       <Card className="glass card-hover animate-fade-in-left h-[400px]" style={{ animationDelay: '0.1s' }}>
         <CardContent className="p-4 h-full flex flex-col">
-          <div className="text-sm font-medium mb-4">执行时间线</div>
+          <div className="text-sm font-medium mb-4">Execution Timeline</div>
           <div className="flex-1 flex flex-col justify-between relative">
             {/* Vertical Connecting Line */}
             <div className="absolute left-[15px] top-4 bottom-4 w-[2px] bg-gradient-to-b from-secondary/50 via-secondary to-secondary/50" />

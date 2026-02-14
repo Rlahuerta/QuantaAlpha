@@ -76,7 +76,7 @@ export const FactorLibraryPage: React.FC = () => {
       }
     } catch (err: any) {
       console.error('Failed to load factors from API:', err);
-      setError('无法连接后端服务。请确保后端已启动 (python backend/app.py)');
+      setError('Unable to connect to backend. Ensure backend is running (python backend/app.py)');
       // Fallback to mock data
       loadMockFactors();
     } finally {
@@ -155,13 +155,13 @@ export const FactorLibraryPage: React.FC = () => {
         <div>
           <h1 className="text-3xl font-bold flex items-center gap-3">
             <Database className="h-8 w-8 text-primary" />
-            因子库
+            Factor Library
           </h1>
           <p className="text-muted-foreground mt-1">
-            浏览和管理挖掘的因子
+            Browse and manage mined factors
             {metadata?.total_factors != null && (
               <span className="ml-2 text-xs">
-                (更新于 {metadata.last_updated ? new Date(metadata.last_updated).toLocaleString('zh-CN') : '未知'})
+                (Updated at {metadata.last_updated ? new Date(metadata.last_updated).toLocaleString('en-US') : 'Unknown'})
               </span>
             )}
           </p>
@@ -173,7 +173,7 @@ export const FactorLibraryPage: React.FC = () => {
               onChange={(e) => setSelectedLibrary(e.target.value)}
               className="rounded-lg border border-input bg-background px-3 py-2 text-sm"
             >
-              <option value="">最新因子库</option>
+              <option value="">Latest factor library</option>
               {libraries.map((lib) => (
                 <option key={lib} value={lib}>{lib}</option>
               ))}
@@ -181,11 +181,11 @@ export const FactorLibraryPage: React.FC = () => {
           )}
           <Button variant="outline" onClick={loadFactors} disabled={isLoading}>
             <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
-            刷新
+            Refresh
           </Button>
           <Button variant="primary" onClick={handleExport}>
             <Download className="h-4 w-4 mr-2" />
-            导出
+            Export
           </Button>
         </div>
       </div>
@@ -204,7 +204,7 @@ export const FactorLibraryPage: React.FC = () => {
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-sm text-muted-foreground">总因子数</div>
+                <div className="text-sm text-muted-foreground">Total factors</div>
                 <div className="text-2xl font-bold mt-1">{stats.total}</div>
               </div>
               <div className="p-3 rounded-lg bg-primary/20">
@@ -218,7 +218,7 @@ export const FactorLibraryPage: React.FC = () => {
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-sm text-muted-foreground">高质量</div>
+                <div className="text-sm text-muted-foreground">High quality</div>
                 <div className="text-2xl font-bold mt-1 text-success">{stats.high}</div>
               </div>
               <div className="p-3 rounded-lg bg-success/20">
@@ -232,7 +232,7 @@ export const FactorLibraryPage: React.FC = () => {
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-sm text-muted-foreground">中等质量</div>
+                <div className="text-sm text-muted-foreground">Medium quality</div>
                 <div className="text-2xl font-bold mt-1 text-warning">{stats.medium}</div>
               </div>
               <div className="p-3 rounded-lg bg-warning/20">
@@ -246,7 +246,7 @@ export const FactorLibraryPage: React.FC = () => {
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-sm text-muted-foreground">低质量</div>
+                <div className="text-sm text-muted-foreground">Low quality</div>
                 <div className="text-2xl font-bold mt-1 text-destructive">{stats.low}</div>
               </div>
               <div className="p-3 rounded-lg bg-destructive/20">
@@ -268,7 +268,7 @@ export const FactorLibraryPage: React.FC = () => {
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="搜索因子名称、表达式或描述..."
+                  placeholder="Search factor name, expression, or description..."
                   className="w-full pl-10 pr-4 py-2 rounded-lg border border-input bg-background text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary transition-all"
                 />
               </div>
@@ -279,28 +279,28 @@ export const FactorLibraryPage: React.FC = () => {
                 size="sm"
                 onClick={() => setQualityFilter('all')}
               >
-                全部 ({stats.total})
+                All ({stats.total})
               </Button>
               <Button
                 variant={qualityFilter === 'high' ? 'primary' : 'outline'}
                 size="sm"
                 onClick={() => setQualityFilter('high')}
               >
-                高质量 ({stats.high})
+                High quality ({stats.high})
               </Button>
               <Button
                 variant={qualityFilter === 'medium' ? 'primary' : 'outline'}
                 size="sm"
                 onClick={() => setQualityFilter('medium')}
               >
-                中等 ({stats.medium})
+                Medium ({stats.medium})
               </Button>
               <Button
                 variant={qualityFilter === 'low' ? 'primary' : 'outline'}
                 size="sm"
                 onClick={() => setQualityFilter('low')}
               >
-                低质量 ({stats.low})
+                Low quality ({stats.low})
               </Button>
             </div>
           </div>
@@ -321,7 +321,7 @@ export const FactorLibraryPage: React.FC = () => {
                   <CardTitle className="text-base">{factor.factorName}</CardTitle>
                   <div className="flex items-center gap-2 mt-2">
                     <Badge className={getQualityBadgeClass(factor.quality)}>
-                      {factor.quality === 'high' ? '高' : factor.quality === 'medium' ? '中' : '低'}
+                      {factor.quality === 'high' ? 'High' : factor.quality === 'medium' ? 'Medium' : 'Low'}
                     </Badge>
                     {factor.round > 0 && (
                       <span className="text-xs text-muted-foreground">
@@ -330,7 +330,7 @@ export const FactorLibraryPage: React.FC = () => {
                     )}
                     {factor.direction && (
                       <span className="text-xs text-muted-foreground">
-                        方向 {factor.direction}
+                        Direction {factor.direction}
                       </span>
                     )}
                   </div>
@@ -344,7 +344,7 @@ export const FactorLibraryPage: React.FC = () => {
               <div className="rounded-lg bg-secondary/30 p-3">
                 <div className="flex items-center gap-2 mb-2">
                   <Code className="h-3 w-3 text-muted-foreground" />
-                  <span className="text-xs text-muted-foreground">表达式</span>
+                  <span className="text-xs text-muted-foreground">Expression</span>
                 </div>
                 <code className="text-xs font-mono line-clamp-2">
                   {factor.factorExpression}
@@ -371,7 +371,7 @@ export const FactorLibraryPage: React.FC = () => {
               {factor.createdAt && (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Calendar className="h-3 w-3" />
-                  {new Date(factor.createdAt).toLocaleString('zh-CN')}
+                  {new Date(factor.createdAt).toLocaleString('en-US')}
                 </div>
               )}
             </CardContent>
@@ -384,11 +384,11 @@ export const FactorLibraryPage: React.FC = () => {
         <Card className="glass">
           <CardContent className="p-12 text-center">
             <Database className="h-16 w-16 mx-auto text-muted-foreground mb-4" />
-            <h3 className="text-lg font-medium mb-2">暂无因子</h3>
+            <h3 className="text-lg font-medium mb-2">No factors yet</h3>
             <p className="text-sm text-muted-foreground">
               {searchQuery || qualityFilter !== 'all'
-                ? '没有符合筛选条件的因子'
-                : '开始挖掘因子后，结果将显示在这里'}
+                ? 'No factors match the current filters'
+                : 'Results will appear here after mining starts'}
             </p>
           </CardContent>
         </Card>
@@ -413,10 +413,10 @@ export const FactorLibraryPage: React.FC = () => {
                   <div className="flex items-center gap-2 mt-2">
                     <Badge className={getQualityBadgeClass(selectedFactor.quality || 'medium')}>
                       {selectedFactor.quality === 'high'
-                        ? '高质量'
+                        ? 'High quality'
                         : selectedFactor.quality === 'medium'
-                        ? '中等质量'
-                        : '低质量'}
+                        ? 'Medium quality'
+                        : 'Low quality'}
                     </Badge>
                   </div>
                 </div>
@@ -428,15 +428,15 @@ export const FactorLibraryPage: React.FC = () => {
             <CardContent className="space-y-4">
               {/* Description */}
               <div>
-                <h4 className="text-sm font-medium mb-2">因子描述</h4>
+                <h4 className="text-sm font-medium mb-2">Factor Description</h4>
                 <p className="text-sm text-muted-foreground">
-                  {selectedFactor.factorDescription || selectedFactor.factor_description || '无描述'}
+                  {selectedFactor.factorDescription || selectedFactor.factor_description || 'No description'}
                 </p>
               </div>
 
               {/* Expression */}
               <div>
-                <h4 className="text-sm font-medium mb-2">因子表达式</h4>
+                <h4 className="text-sm font-medium mb-2">Factor Expression</h4>
                 <div className="rounded-lg bg-secondary/30 p-4">
                   <code className="text-sm font-mono break-all">
                     {selectedFactor.factorExpression || selectedFactor.factor_expression || ''}
@@ -447,7 +447,7 @@ export const FactorLibraryPage: React.FC = () => {
               {/* Formulation */}
               {(selectedFactor.factorFormulation || selectedFactor.factor_formulation) && (
                 <div>
-                  <h4 className="text-sm font-medium mb-2">数学公式</h4>
+                  <h4 className="text-sm font-medium mb-2">Mathematical formulation</h4>
                   <div className="rounded-lg bg-secondary/30 p-4">
                     <code className="text-sm font-mono break-all">
                       {selectedFactor.factorFormulation || selectedFactor.factor_formulation}
@@ -459,7 +459,7 @@ export const FactorLibraryPage: React.FC = () => {
               {/* Backtest Results */}
               {(selectedFactor.backtestResults || selectedFactor.backtest_results) && (
                 <div>
-                  <h4 className="text-sm font-medium mb-2">回测指标</h4>
+                  <h4 className="text-sm font-medium mb-2">Backtest Metrics</h4>
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                     {Object.entries(
                       selectedFactor.backtestResults || selectedFactor.backtest_results || {}
@@ -479,21 +479,21 @@ export const FactorLibraryPage: React.FC = () => {
 
               {/* Meta */}
               <div>
-                <h4 className="text-sm font-medium mb-2">元信息</h4>
+                <h4 className="text-sm font-medium mb-2">Metadata</h4>
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">因子ID:</span>
+                    <span className="text-muted-foreground">Factor ID:</span>
                     <span className="font-mono">
                       {selectedFactor.factorId || selectedFactor.factor_id || ''}
                     </span>
                   </div>
                   {(selectedFactor.createdAt || selectedFactor.added_at) && (
                     <div className="flex justify-between">
-                      <span className="text-muted-foreground">创建时间:</span>
+                      <span className="text-muted-foreground">Created at:</span>
                       <span>
                         {new Date(
                           selectedFactor.createdAt || selectedFactor.added_at
-                        ).toLocaleString('zh-CN')}
+                        ).toLocaleString('en-US')}
                       </span>
                     </div>
                   )}
@@ -510,14 +510,14 @@ export const FactorLibraryPage: React.FC = () => {
 // Generate mock factors for demo when backend is unavailable
 function generateMockFactors(): Factor[] {
   const qualities: FactorQuality[] = ['high', 'medium', 'low'];
-  const directions = ['动量类', '价值类', '成长类', '技术指标'];
+  const directions = ['Momentum', 'Value', 'Growth', 'Technical'];
   const factors: Factor[] = [];
   for (let i = 0; i < 30; i++) {
     factors.push({
       factorId: `factor_${i + 1}`,
       factorName: `Factor_${i + 1}_${directions[i % 4]}`,
       factorExpression: `RANK(TS_MEAN($close / DELAY($close, ${10 + i}), ${5 + i}) * $volume)`,
-      factorDescription: `这是一个${directions[i % 4]}因子，结合了价格动量和成交量特征`,
+      factorDescription: `This is a ${directions[i % 4]} factor combining price momentum and volume features`,
       quality: qualities[i % 3],
       ic: 0.03 + Math.random() * 0.05,
       icir: 0.3 + Math.random() * 0.5,

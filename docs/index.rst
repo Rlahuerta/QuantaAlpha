@@ -1,8 +1,11 @@
-   Welcome to QuantaAlpha's documentation!
-   =========================================
+Welcome to QuantaAlpha's documentation!
+========================================
 
-   .. toctree::
-      :maxdepth: 2
-      :caption: Contents:
+.. toctree::
+   :maxdepth: 2
+   :caption: Contents:
 
-      changelog
+   tutorial
+   user_guide
+   experiment_guide
+   experiment_hyperparameters
