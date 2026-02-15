@@ -7,6 +7,7 @@ and reads factor library JSON for the factor browsing API.
 """
 
 import asyncio
+import difflib
 import glob
 import json
 import os
@@ -103,6 +104,96 @@ def _now() -> str:
     return datetime.now().isoformat()
 
 
+def _strip_wrapping_quotes(value: str) -> str:
+    """Remove matching wrapping quotes from env values, e.g. "path" -> path."""
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1].strip()
+    return value
+
+
+_KNOWN_ENV_KEYS = {
+    "QLIB_DATA_DIR", "DATA_RESULTS_DIR", "QLIB_PROVIDER_URI", "CONDA_ENV_NAME",
+    "OPENAI_API_KEY", "OPENAI_BASE_URL", "REASONING_MODEL", "CHAT_MODEL",
+    "EMBEDDING_MODEL", "EMBEDDING_API_KEY", "EMBEDDING_BASE_URL",
+    "FACTOR_CoSTEER_DATA_FOLDER", "FACTOR_CoSTEER_DATA_FOLDER_DEBUG",
+    "USE_LOCAL", "MAX_RETRY", "RETRY_WAIT_SECONDS", "FACTOR_MINING_TIMEOUT",
+    "CHAT_MAX_TOKENS", "CHAT_TEMPERATURE",
+}
+_QLIB_REQUIRED_SUBDIRS = ("calendars", "features", "instruments")
+
+
+def _looks_like_placeholder(value: str) -> bool:
+    value = value.strip()
+    if not value:
+        return False
+    return ("<" in value and ">" in value) or value.startswith("path/to") or value.startswith("/path/to")
+
+
+def _has_suspicious_quote_wrapping(value: str) -> bool:
+    value = value.strip()
+    if not value:
+        return False
+    has_edge_quote = value[0] in {"'", '"'} or value[-1] in {"'", '"'}
+    if not has_edge_quote:
+        return False
+    return not (len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'})
+
+
+def _validate_env_preconditions(task_type: str, dotenv: Dict[str, str]):
+    """Preprocess/validate runtime environment and fail early on likely typos."""
+    effective_env = os.environ.copy()
+    effective_env.update(dotenv)
+    errors: List[str] = []
+
+    # Catch likely misspelled keys in .env
+    for key in dotenv.keys():
+        if key in _KNOWN_ENV_KEYS:
+            continue
+        suggestion = difflib.get_close_matches(key, _KNOWN_ENV_KEYS, n=1, cutoff=0.86)
+        if suggestion:
+            errors.append(f"Unknown .env key '{key}'. Did you mean '{suggestion[0]}'?")
+
+    required_by_task = {
+        "mining": ["OPENAI_API_KEY", "OPENAI_BASE_URL", "CHAT_MODEL", "REASONING_MODEL", "DATA_RESULTS_DIR"],
+        "backtest": [],
+    }
+    for key in required_by_task.get(task_type, []):
+        value = (effective_env.get(key) or "").strip()
+        if not value:
+            errors.append(f"Missing required setting '{key}'.")
+            continue
+        if _looks_like_placeholder(value):
+            errors.append(f"Setting '{key}' still has a placeholder value: {value!r}.")
+        if _has_suspicious_quote_wrapping(value):
+            errors.append(f"Setting '{key}' has suspicious quote wrapping: {value!r}.")
+
+    qlib_path_raw = (
+        (effective_env.get("QLIB_DATA_DIR") or "").strip()
+        or (effective_env.get("QLIB_PROVIDER_URI") or "").strip()
+    )
+    if not qlib_path_raw:
+        errors.append("Missing Qlib data path. Set QLIB_DATA_DIR (or QLIB_PROVIDER_URI).")
+    else:
+        if _looks_like_placeholder(qlib_path_raw):
+            errors.append(f"Qlib data path looks like a placeholder: {qlib_path_raw!r}.")
+        if _has_suspicious_quote_wrapping(qlib_path_raw):
+            errors.append(f"Qlib data path has suspicious quote wrapping: {qlib_path_raw!r}.")
+
+        qlib_path = Path(os.path.expanduser(qlib_path_raw))
+        if not qlib_path.exists():
+            errors.append(f"Qlib data path does not exist: {qlib_path}.")
+        else:
+            missing_subdirs = [d for d in _QLIB_REQUIRED_SUBDIRS if not (qlib_path / d).exists()]
+            if missing_subdirs:
+                errors.append(
+                    f"Qlib data path is invalid ({qlib_path}); missing subdirectories: {', '.join(missing_subdirs)}."
+                )
+
+    if errors:
+        raise ValueError("Environment preprocessing verification failed:\n- " + "\n- ".join(errors))
+
+
 def _load_dotenv_dict() -> Dict[str, str]:
     """Parse the .env file into a dict (simple key=value, ignoring comments)."""
     env: Dict[str, str] = {}
@@ -113,7 +204,7 @@ def _load_dotenv_dict() -> Dict[str, str]:
                 continue
             if "=" in stripped:
                 key, _, val = stripped.partition("=")
-                env[key.strip()] = val.strip()
+                env[key.strip()] = _strip_wrapping_quotes(val)
     return env
 
 
@@ -466,6 +557,11 @@ async def health_check():
 @app.post("/api/v1/mining/start", response_model=ApiResponse)
 async def start_mining(req: MiningStartRequest):
     """Start a new factor mining experiment."""
+    try:
+        _validate_env_preconditions(task_type="mining", dotenv=_load_dotenv_dict())
+    except ValueError as e:
+        return ApiResponse(success=False, error=str(e))
+
     task_id = _gen_id()
     task = {
         "taskId": task_id,
@@ -769,6 +865,11 @@ async def get_factor_detail(factor_id: str):
 @app.post("/api/v1/backtest/start", response_model=ApiResponse)
 async def start_backtest(req: BacktestStartRequest):
     """Start an independent backtest."""
+    try:
+        _validate_env_preconditions(task_type="backtest", dotenv=_load_dotenv_dict())
+    except ValueError as e:
+        return ApiResponse(success=False, error=str(e))
+
     task_id = _gen_id()
     config_path = req.configPath or str(PROJECT_ROOT / "configs" / "backtest.yaml")
 

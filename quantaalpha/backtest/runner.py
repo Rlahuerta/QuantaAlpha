@@ -215,56 +215,77 @@ class BacktestRunner:
         logger.debug(f"  Computed factor count: {len(computed_factors.columns)}")
         label_expr = dataset_config['label']
         label_df = self._compute_label(label_expr)
-        
+
+        def _normalize_multiindex(df, df_name):
+            """Normalize index to MultiIndex(datetime, instrument) with robust type inference."""
+            if not isinstance(df.index, pd.MultiIndex):
+                raise ValueError(f"{df_name} index must be MultiIndex, got {type(df.index)}")
+            if df.index.nlevels != 2:
+                raise ValueError(f"{df_name} index must have 2 levels, got {df.index.nlevels}")
+
+            names = list(df.index.names)
+            level0 = df.index.get_level_values(0)
+            level1 = df.index.get_level_values(1)
+            logger.debug(
+                f"  {df_name} index levels: {names}, "
+                f"dtypes: {[str(level0.dtype), str(level1.dtype)]}, len: {len(df)}"
+            )
+
+            def _datetime_score(values) -> float:
+                sample = pd.Series(values).dropna()
+                if sample.empty:
+                    return 0.0
+                sample = sample.astype(str).head(200)
+                parsed = pd.to_datetime(sample, errors="coerce")
+                return float(parsed.notna().mean())
+
+            dt_level = None
+            inst_level = None
+            for i, name in enumerate(names):
+                n = (name or "").lower()
+                if n in {"datetime", "date", "dt", "time", "timestamp"}:
+                    dt_level = i
+                elif n in {"instrument", "stock", "symbol", "ticker", "code"}:
+                    inst_level = i
+
+            if dt_level is None:
+                score0 = _datetime_score(level0)
+                score1 = _datetime_score(level1)
+                dt_level = 0 if score0 >= score1 else 1
+            if inst_level is None or inst_level == dt_level:
+                inst_level = 1 - dt_level
+
+            dt_values = pd.to_datetime(df.index.get_level_values(dt_level), errors="coerce")
+            inst_values = df.index.get_level_values(inst_level).astype(str)
+            valid_mask = ~pd.isna(dt_values)
+            dropped_rows = int((~valid_mask).sum())
+            if dropped_rows > 0:
+                logger.warning(f"  {df_name}: dropping {dropped_rows} rows with invalid datetime level values")
+                df = df.loc[valid_mask]
+                dt_values = pd.to_datetime(df.index.get_level_values(dt_level), errors="coerce")
+                inst_values = df.index.get_level_values(inst_level).astype(str)
+
+            df = df.copy()
+            df.index = pd.MultiIndex.from_arrays([dt_values, inst_values], names=["datetime", "instrument"])
+            df = df.sort_index()
+            logger.debug(f"  {df_name} index normalized to ['datetime', 'instrument']")
+            return df
+
+        computed_factors = _normalize_multiindex(computed_factors, "computed_features")
+        label_df = _normalize_multiindex(label_df, "label")
+
         all_feature_dfs = [computed_factors]
         if factor_expressions:
             logger.debug(f"  Loading {len(factor_expressions)} Qlib-compatible factors")
             qlib_factors = self._load_qlib_factors(factor_expressions)
             if qlib_factors is not None and not qlib_factors.empty:
+                qlib_factors = _normalize_multiindex(qlib_factors, "qlib_features")
                 all_feature_dfs.append(qlib_factors)
-        
+
         features_df = pd.concat(all_feature_dfs, axis=1)
         features_df = features_df.loc[:, ~features_df.columns.duplicated()]
         logger.debug(f"  Total factor count: {len(features_df.columns)}")
-
-        def _normalize_multiindex(df, df_name):
-            """Ensure MultiIndex has standard (datetime, instrument) level names."""
-            if not isinstance(df.index, pd.MultiIndex):
-                logger.warning(f"  {df_name} index is not MultiIndex: {type(df.index)}")
-                return df
-            
-            names = list(df.index.names)
-            logger.debug(f"  {df_name} index levels: {names}, "
-                        f"dtypes: {[str(df.index.get_level_values(i).dtype) for i in range(len(names))]}, "
-                        f"len: {len(df)}")
-            
-            new_names = list(names)
-            for i, name in enumerate(names):
-                level_vals = df.index.get_level_values(i)
-                if name == 'datetime' or name == 'date':
-                    new_names[i] = 'datetime'
-                elif name == 'instrument' or name == 'stock':
-                    new_names[i] = 'instrument'
-                elif name is None:
-                    # Infer from dtype
-                    if pd.api.types.is_datetime64_any_dtype(level_vals):
-                        new_names[i] = 'datetime'
-                    elif level_vals.dtype == object or pd.api.types.is_string_dtype(level_vals):
-                        new_names[i] = 'instrument'
-            
-            if new_names != names:
-                logger.debug(f"  {df_name} index renamed: {names} -> {new_names}")
-                df.index = df.index.set_names(new_names)
-            actual_names = list(df.index.names)
-            if len(actual_names) == 2 and actual_names == ['instrument', 'datetime']:
-                df = df.swaplevel()
-                df = df.sort_index()
-                logger.debug(f"  {df_name} index swapped to (datetime, instrument)")
-            
-            return df
-        
         features_df = _normalize_multiindex(features_df, "features")
-        label_df = _normalize_multiindex(label_df, "label")
         
         common_index = features_df.index.intersection(label_df.index)
         if len(common_index) == 0 and len(features_df) > 0 and len(label_df) > 0:
