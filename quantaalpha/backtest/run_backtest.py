@@ -9,6 +9,7 @@ Backtest entry script. Usage:
 import argparse
 import logging
 import sys
+import types
 from pathlib import Path
 
 project_root = Path(__file__).resolve().parents[2]
@@ -30,6 +31,10 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+# Suppress gym_notices stderr banner from optional RL deps not used in this backtest flow.
+_gym_notices_stub = types.ModuleType("gym_notices.notices")
+_gym_notices_stub.notices = {}
+sys.modules.setdefault("gym_notices.notices", _gym_notices_stub)
 
 
 def main():
@@ -59,6 +64,9 @@ Examples:
     
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+        logging.getLogger("graphviz").setLevel(logging.WARNING)
+        logging.getLogger("git").setLevel(logging.WARNING)
+        logging.getLogger("git.cmd").setLevel(logging.WARNING)
     config_path = Path(args.config)
     if not config_path.exists():
         logger.error(f"Config file not found: {config_path}")
@@ -116,4 +124,3 @@ Examples:
 
 if __name__ == '__main__':
     main()
-

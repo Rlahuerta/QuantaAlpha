@@ -39,35 +39,80 @@ def robust_json_parse(text: str, max_retries: int = 3) -> dict:
     Raises json.JSONDecodeError if all strategies fail.
     """
     original_text = text
+    text = text.strip()
+
+    def _parse_candidate(candidate: str) -> Optional[dict]:
+        candidate = candidate.strip()
+        if not candidate:
+            return None
+        try:
+            parsed = json.loads(candidate)
+            return parsed if isinstance(parsed, dict) and len(parsed) > 0 else None
+        except json.JSONDecodeError:
+            pass
+        try:
+            import yaml
+            parsed = yaml.safe_load(candidate)
+            return parsed if isinstance(parsed, dict) and len(parsed) > 0 else None
+        except Exception:
+            return None
+
+    def _fix_common_json_issues(candidate: str) -> str:
+        fixed = candidate
+        latex_commands = [
+            "text",
+            "frac",
+            "left",
+            "right",
+            "times",
+            "cdot",
+            "sqrt",
+            "sum",
+            "prod",
+            "int",
+            "alpha",
+            "beta",
+            "gamma",
+            "delta",
+        ]
+        for cmd in latex_commands:
+            fixed = re.sub(r"(?<!\\)\\(" + cmd + r")", r"\\\\\1", fixed)
+        fixed = re.sub(r"(?<!\\)\\([_\{\}\[\]])", r"\\\\\1", fixed)
+        fixed = re.sub(r",(\s*[}\]])", r"\1", fixed)
+        fixed = re.sub(
+            r"([{\[,]\s*)([A-Za-z_][A-Za-z0-9_\- ]*)(\s*:)",
+            lambda m: f'{m.group(1)}"{m.group(2).strip()}"{m.group(3)}',
+            fixed,
+        )
+        return fixed
 
     # Strategy 1: direct parse
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    
-    # Strategy 2: extract JSON code block
-    json_block_pattern = r'```(?:json)?\s*\n?([\s\S]*?)\n?```'
-    matches = re.findall(json_block_pattern, text)
-    if matches:
-        for match in matches:
-            try:
-                return json.loads(match.strip())
-            except json.JSONDecodeError:
-                continue
-    
-    # Strategy 3: find first complete JSON object (extra data)
+    parsed = _parse_candidate(text)
+    if parsed is not None:
+        return parsed
+
+    # Strategy 2: extract markdown code block and parse
+    json_block_pattern = r"```(?:json)?\s*\n?([\s\S]*?)\n?```"
+    matches = re.findall(json_block_pattern, text, flags=re.IGNORECASE)
+    for match in matches:
+        parsed = _parse_candidate(match)
+        if parsed is not None:
+            return parsed
+        parsed = _parse_candidate(_fix_common_json_issues(match))
+        if parsed is not None:
+            return parsed
+
+    # Strategy 3: find first complete JSON object
     brace_count = 0
     start_idx = -1
     end_idx = -1
     in_string = False
     escape_next = False
-    
     for i, char in enumerate(text):
         if escape_next:
             escape_next = False
             continue
-        if char == '\\':
+        if char == "\\":
             escape_next = True
             continue
         if char == '"' and not escape_next:
@@ -75,45 +120,45 @@ def robust_json_parse(text: str, max_retries: int = 3) -> dict:
             continue
         if in_string:
             continue
-            
-        if char == '{':
+        if char == "{":
             if brace_count == 0:
                 start_idx = i
             brace_count += 1
-        elif char == '}':
+        elif char == "}":
             brace_count -= 1
             if brace_count == 0 and start_idx != -1:
                 end_idx = i
                 break
-    
     if start_idx != -1 and end_idx != -1:
-        json_str = text[start_idx:end_idx + 1]
-        try:
-            return json.loads(json_str)
-        except json.JSONDecodeError:
-            # Strategy 4: fix LaTeX escapes
-            fixed_str = json_str
-            latex_commands = ['text', 'frac', 'left', 'right', 'times', 'cdot', 'sqrt', 
-                              'sum', 'prod', 'int', 'alpha', 'beta', 'gamma', 'delta']
-            for cmd in latex_commands:
-                fixed_str = re.sub(r'(?<!\\)\\(' + cmd + r')', r'\\\\\1', fixed_str)
-            fixed_str = re.sub(r'(?<!\\)\\([_\{\}\[\]])', r'\\\\\1', fixed_str)
-            
-            try:
-                return json.loads(fixed_str)
-            except json.JSONDecodeError:
-                pass
-    
-    # Strategy 5: looser JSON extraction
-    potential_jsons = re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text)
+        json_str = text[start_idx : end_idx + 1]
+        parsed = _parse_candidate(json_str)
+        if parsed is not None:
+            return parsed
+        parsed = _parse_candidate(_fix_common_json_issues(json_str))
+        if parsed is not None:
+            return parsed
+
+    # Strategy 4: wrap key/value block without braces
+    cleaned = re.sub(r"```(?:json)?|```", "", text, flags=re.IGNORECASE).strip()
+    if cleaned and "{" not in cleaned and ":" in cleaned:
+        wrapped = "{\n" + cleaned + "\n}"
+        parsed = _parse_candidate(wrapped)
+        if parsed is not None:
+            return parsed
+        parsed = _parse_candidate(_fix_common_json_issues(wrapped))
+        if parsed is not None:
+            return parsed
+
+    # Strategy 5: looser extraction
+    potential_jsons = re.findall(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", text)
     for pj in potential_jsons:
-        try:
-            result = json.loads(pj)
-            if isinstance(result, dict) and len(result) > 0:
-                return result
-        except json.JSONDecodeError:
-            continue
-    
+        parsed = _parse_candidate(pj)
+        if parsed is not None:
+            return parsed
+        parsed = _parse_candidate(_fix_common_json_issues(pj))
+        if parsed is not None:
+            return parsed
+
     raise json.JSONDecodeError(
         f"Could not parse JSON; original text length: {len(original_text)}",
         original_text,
@@ -130,11 +175,6 @@ try:
     import openai
 except ImportError:
     logger.warning("openai is not installed.")
-
-try:
-    from llama import Llama
-except ImportError:
-    logger.warning("llama is not installed.")
 
 
 class ConvManager:
@@ -348,15 +388,7 @@ class APIBackend:
         use_embedding_cache: bool | None = None,
         dump_embedding_cache: bool | None = None,
     ) -> None:
-        if LLM_SETTINGS.use_llama2:
-            self.generator = Llama.build(
-                ckpt_dir=LLM_SETTINGS.llama2_ckpt_dir,
-                tokenizer_path=LLM_SETTINGS.llama2_tokenizer_path,
-                max_seq_len=LLM_SETTINGS.max_tokens,
-                max_batch_size=LLM_SETTINGS.llams2_max_batch_size,
-            )
-            self.encoder = None
-        elif LLM_SETTINGS.use_gcr_endpoint:
+        if LLM_SETTINGS.use_gcr_endpoint:
             gcr_endpoint_type = LLM_SETTINGS.gcr_endpoint_type
             if gcr_endpoint_type == "llama2_70b":
                 self.gcr_endpoint_key = LLM_SETTINGS.llama2_70b_endpoint_key
@@ -400,18 +432,22 @@ class APIBackend:
             self.embedding_use_azure_token_provider = LLM_SETTINGS.embedding_use_azure_token_provider
             self.managed_identity_client_id = LLM_SETTINGS.managed_identity_client_id
 
-            # Priority: chat_api_key/embedding_api_key > openai_api_key > os.environ.get("OPENAI_API_KEY")
+            # Priority: explicit args > model-specific key > OLLAMA key > OPENAI key > env.
             # TODO: Simplify the key design. Consider Pandatic's field alias & priority.
             self.chat_api_key = (
                 chat_api_key
                 or LLM_SETTINGS.chat_openai_api_key
+                or LLM_SETTINGS.ollama_api_key
                 or LLM_SETTINGS.openai_api_key
+                or os.environ.get("OLLAMA_API_KEY")
                 or os.environ.get("OPENAI_API_KEY")
             )
             self.embedding_api_key = (
                 embedding_api_key
                 or LLM_SETTINGS.embedding_openai_api_key
+                or LLM_SETTINGS.ollama_api_key
                 or LLM_SETTINGS.openai_api_key
+                or os.environ.get("OLLAMA_API_KEY")
                 or os.environ.get("OPENAI_API_KEY")
             )
             
@@ -428,6 +464,7 @@ class APIBackend:
             self.embedding_api_key = (
                 LLM_SETTINGS.embedding_api_key
                 or os.environ.get("EMBEDDING_API_KEY")
+                or self.embedding_api_key
             )
             
 
@@ -503,7 +540,6 @@ class APIBackend:
             self.cache = SQliteLazyCache(cache_location=self.cache_file_location)
 
         # transfer the config to the class if the config is not supposed to change during the runtime
-        self.use_llama2 = LLM_SETTINGS.use_llama2
         self.use_gcr_endpoint = LLM_SETTINGS.use_gcr_endpoint
         self.retry_wait_seconds = LLM_SETTINGS.retry_wait_seconds
 
@@ -803,21 +839,11 @@ class APIBackend:
             
         if reasoning_flag:
             model = self.reasoning_model
-            json_mode = None
         else:
             model = self.chat_model_map.get(tag, self.chat_model)
 
         finish_reason = None
-        if self.use_llama2:
-            response = self.generator.chat_completion(
-                messages,  # type: ignore
-                max_gen_len=max_tokens,
-                temperature=temperature,
-            )
-            resp = response[0]["generation"]["content"]
-            if LLM_SETTINGS.log_llm_chat_content:
-                logger.info(f"{LogColors.CYAN}Response:{resp}{LogColors.END}", tag="llm_messages")
-        elif self.use_gcr_endpoint:
+        if self.use_gcr_endpoint:
             body = str.encode(
                 json.dumps(
                     {
@@ -894,44 +920,20 @@ class APIBackend:
                         ),
                         tag="llm_messages",
                     )
-            if json_mode or reasoning_flag:
-                # Extract JSON part
-                json_start = resp.find('{')
-                json_end = resp.rfind('}') + 1
-                resp = resp[json_start:json_end]
-                # Try parse JSON; on failure try to fix
+            if json_mode:
                 try:
-                    json.loads(resp)
+                    resp = json.dumps(robust_json_parse(resp), ensure_ascii=False)
                 except json.JSONDecodeError as e:
-                    import re
-                    error_msg = str(e).lower()
-                    # Fix common JSON format issues
-                    fixed_resp = resp
-                    
-                    # Fix LaTeX backslash: \text, \frac etc. misinterpreted as escapes
-                    latex_commands = ['text', 'frac', 'left', 'right', 'times', 'cdot', 'sqrt', 'sum', 'prod', 'int']
-                    for cmd in latex_commands:
-                        # Replace single backslash only
-                        fixed_resp = re.sub(r'(?<!\\)\\(' + cmd + r')', r'\\\\\1', fixed_resp)
-                    
-                    # Fix other invalid escapes: \_ \{ \} etc.
-                    fixed_resp = re.sub(r'(?<!\\)\\([_\{\}\[\]])', r'\\\\\1', fixed_resp)
-                    
-                    try:
-                        json.loads(fixed_resp)
-                        resp = fixed_resp
-                        logger.info("Fixed JSON format issues")
-                    except json.JSONDecodeError as e2:
-                        logger.warning(f"JSON fix failed: {e2}, using raw response")
+                    logger.warning(f"JSON normalization skipped: {e}")
         if self.dump_chat_cache:
             self.cache.chat_set(input_content_json, resp)
         return resp, finish_reason
 
     def calculate_token_from_messages(self, messages: list[dict]) -> int:
         return 0
-        if self.use_llama2 or self.use_gcr_endpoint:
-            logger.warning("num_tokens_from_messages() is not implemented for model llama2.")
-            return 0  # TODO implement this function for llama2
+        if self.use_gcr_endpoint:
+            logger.warning("num_tokens_from_messages() is not implemented for gcr endpoint.")
+            return 0  # TODO implement this function for gcr endpoint
 
         if "gpt4" in self.chat_model or "gpt-4" in self.chat_model:
             tokens_per_message = 3

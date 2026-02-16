@@ -5,23 +5,23 @@ from joblib import Parallel, delayed
 
 
 def datatype_adapter(func):
-    def wrapper(*args):
+    def wrapper(*args, **kwargs):
         if len(args) == 1 and isinstance(args[0], np.ndarray):
             new_args = (pd.DataFrame(args[0]),)
-            result = func(*new_args)
+            result = func(*new_args, **kwargs)
             return result
         if len(args) == 1 and isinstance(args[0], (float, int)):
             new_args = (pd.DataFrame([args[0]]),)
-            result = func(*new_args)
+            result = func(*new_args, **kwargs)
             return float(result.iloc[0])
         if (len(args) == 2 and isinstance(args[0], np.ndarray) and not isinstance(args[1], np.ndarray)):
             new_args = (pd.DataFrame(args[0]), args[1])
-            result = func(*new_args)
+            result = func(*new_args, **kwargs)
         elif (len(args) == 2 and isinstance(args[1], np.ndarray) and not isinstance(args[0], np.ndarray)):
             new_args = (args[0], pd.DataFrame(args[1]))
-            result = func(*new_args)
+            result = func(*new_args, **kwargs)
         else:
-            result = func(*args)
+            result = func(*args, **kwargs)
         return result
 
     return wrapper
@@ -885,7 +885,10 @@ def _calculate_rolling_mean(group_data):
     result = pd.Series(index=price_group.index, dtype=float)
     
     for i in range(len(price_group)):
-        curr_window = int(window_group.iloc[i].values)
+        window_value = window_group.iloc[i]
+        if hasattr(window_value, "values"):
+            window_value = np.asarray(window_value.values).ravel()[0]
+        curr_window = int(window_value)
         if curr_window < 1:
             curr_window = 1
         if i < curr_window:
@@ -901,7 +904,10 @@ def _calculate_rolling_std(group_data):
     result = pd.Series(index=price_group.index, dtype=float)
     
     for i in range(len(price_group)):
-        curr_window = int(window_group.iloc[i].values)
+        window_value = window_group.iloc[i]
+        if hasattr(window_value, "values"):
+            window_value = np.asarray(window_value.values).ravel()[0]
+        curr_window = int(window_value)
         if curr_window < 1:
             curr_window = 1
         if i < curr_window:

@@ -25,6 +25,7 @@ class LLMSettings(ExtendedBaseSettings):
     use_auto_chat_cache_seed_gen: bool = False
     init_chat_cache_seed: int = 42
 
+    ollama_api_key: str = ""
     openai_api_key: str = ""
     openai_base_url: str = ""
     chat_openai_api_key: str = ""
@@ -59,7 +60,6 @@ class LLMSettings(ExtendedBaseSettings):
     embedding_azure_api_version: str = ""
 
     # Offline/endpoint (rarely used)
-    use_llama2: bool = False
     use_gcr_endpoint: bool = False
 
     chat_model_map: str = "{}"

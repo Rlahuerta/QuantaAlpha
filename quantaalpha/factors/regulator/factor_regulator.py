@@ -51,6 +51,9 @@ class FactorRegulator(Evaluator):
         Returns:
             bool: True if the expression can be parsed, False otherwise.
         """
+        if expression is None or not str(expression).strip():
+            logger.warning("Failed to parse expression: empty expression")
+            return False
         try:
             parse_expression(expression)
             return True
@@ -170,7 +173,7 @@ class FactorRegulator(Evaluator):
         return cond1 and cond2 and cond3 and cond4 and cond5
     
             
-    def add_factor(self, factor_name: str, factor_expression: str) -> bool:
+    def add_factor(self, factor_name: str | list[str], factor_expression: str | list[str]) -> bool:
         """
         Adds a new factor to the in-memory factor zoo if it passes the duplication check.
         
@@ -181,13 +184,20 @@ class FactorRegulator(Evaluator):
         Returns:
             bool: True if the factor was added, False otherwise.
         """
-        new_factor = pd.DataFrame({
-                'factor_name': factor_name,
-                'factor_expression': factor_expression
-                })
-            
+        factor_names = [factor_name] if isinstance(factor_name, str) else list(factor_name)
+        factor_expressions = [factor_expression] if isinstance(factor_expression, str) else list(factor_expression)
+        if len(factor_names) != len(factor_expressions):
+            raise ValueError("factor_name and factor_expression must have the same length")
+
+        new_factor = pd.DataFrame(
+            {
+                'factor_name': factor_names,
+                'factor_expression': factor_expressions,
+            }
+        )
+
         self.alphazoo = pd.concat([self.alphazoo, new_factor])
-        self.new_factors.append((factor_name, factor_expression))
+        self.new_factors.extend(zip(factor_names, factor_expressions))
         logger.info(f"Added new factor: {factor_name} with expression: {factor_expression}")
             
     def save_factor_zoo(self, output_path: Optional[str] = None) -> None:

@@ -354,8 +354,9 @@ class FactorEqualValueRatioEvaluator(FactorEvaluator):
             result_int = close_values.astype(int)
             pos_num = result_int.sum().sum()
             acc_rate = pos_num / close_values.size
-        except:
-            close_values = gen_df
+        except Exception:
+            close_values = pd.DataFrame(False, index=gen_df.index, columns=gen_df.columns)
+            acc_rate = 0.0
         if close_values.all().iloc[0]:
             return (
                 "All values in the dataframes are equal within the tolerance of 1e-6.",

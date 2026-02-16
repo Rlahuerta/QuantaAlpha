@@ -92,7 +92,7 @@ export const SettingsPage: React.FC = () => {
           } catch { /* use defaults */ }
         }
         setConfig({
-          apiKey: env.OPENAI_API_KEY || '',
+          apiKey: env.OLLAMA_API_KEY || env.OPENAI_API_KEY || '',
           apiUrl: env.OPENAI_BASE_URL || DEFAULT_CONFIG.apiUrl,
           modelName: env.CHAT_MODEL || DEFAULT_CONFIG.modelName,
           qlibDataPath: env.QLIB_DATA_DIR || '',
@@ -144,7 +144,7 @@ export const SettingsPage: React.FC = () => {
     try {
       const update: Record<string, string> = {};
       if (config.apiKey && !config.apiKey.includes('...')) {
-        update.OPENAI_API_KEY = config.apiKey;
+        update.OLLAMA_API_KEY = config.apiKey;
       }
       if (config.apiUrl) update.OPENAI_BASE_URL = config.apiUrl;
       if (config.modelName) {

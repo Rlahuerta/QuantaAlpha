@@ -342,14 +342,20 @@ def preprocess_unary_minus(factor_expression):
 
 
 def parse_expression(factor_expression):
+    if factor_expression is None:
+        raise ValueError("Expression is None")
+    factor_expression = str(factor_expression).strip()
+    if not factor_expression:
+        raise ValueError("Expression is empty")
+
     check_parentheses_balance(factor_expression)
     check_for_invalid_operators(factor_expression)
     
     factor_expression = preprocess_unary_minus(factor_expression)
-    
-    print("factor_expression: ", factor_expression)
-    
-    parsed_data_function = expr.parseString(factor_expression)[0]
+    try:
+        parsed_data_function = expr.parseString(factor_expression, parseAll=True)[0]
+    except RecursionError as e:
+        raise ParseException(f"Expression parse recursion error: {e}") from e
     return parsed_data_function
 
 
@@ -371,8 +377,9 @@ def parse_symbol(expr, columns):
         replace_map.update({col: col.replace('$', '')})
         # replace_map.update({col.replace('$', '').upper(): col.replace('$', '')})
 
-    for var, var_df in replace_map.items():
-        expr = expr.replace(var, var_df)
+    for var, var_df in sorted(replace_map.items(), key=lambda x: len(x[0]), reverse=True):
+        pattern = rf"(?<![A-Za-z0-9_\$]){re.escape(var)}(?![A-Za-z0-9_])"
+        expr = re.sub(pattern, var_df, expr)
     return expr
 
 if __name__ == '__main__':

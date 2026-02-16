@@ -69,7 +69,7 @@ python -m quantaalpha.backtest.run_backtest \
 
 ### LLM issues
 
-- Verify `OPENAI_BASE_URL`, `OPENAI_API_KEY`
+- Verify `OPENAI_BASE_URL`, `OLLAMA_API_KEY`
 - Confirm model is available from provider endpoint
 - Check JSON-mode responses for strict parsability
 

@@ -75,6 +75,7 @@ class SystemConfigUpdate(BaseModel):
     """Partial update to system configuration (.env)."""
     QLIB_DATA_DIR: Optional[str] = None
     DATA_RESULTS_DIR: Optional[str] = None
+    OLLAMA_API_KEY: Optional[str] = None
     OPENAI_API_KEY: Optional[str] = None
     OPENAI_BASE_URL: Optional[str] = None
     CHAT_MODEL: Optional[str] = None
@@ -114,6 +115,7 @@ def _strip_wrapping_quotes(value: str) -> str:
 
 _KNOWN_ENV_KEYS = {
     "QLIB_DATA_DIR", "DATA_RESULTS_DIR", "QLIB_PROVIDER_URI", "CONDA_ENV_NAME",
+    "OLLAMA_API_KEY",
     "OPENAI_API_KEY", "OPENAI_BASE_URL", "REASONING_MODEL", "CHAT_MODEL",
     "EMBEDDING_MODEL", "EMBEDDING_API_KEY", "EMBEDDING_BASE_URL",
     "FACTOR_CoSTEER_DATA_FOLDER", "FACTOR_CoSTEER_DATA_FOLDER_DEBUG",
@@ -144,6 +146,10 @@ def _validate_env_preconditions(task_type: str, dotenv: Dict[str, str]):
     """Preprocess/validate runtime environment and fail early on likely typos."""
     effective_env = os.environ.copy()
     effective_env.update(dotenv)
+    if not (effective_env.get("OLLAMA_API_KEY") or "").strip():
+        effective_env["OLLAMA_API_KEY"] = (effective_env.get("OPENAI_API_KEY") or "").strip()
+    if not (effective_env.get("OPENAI_API_KEY") or "").strip():
+        effective_env["OPENAI_API_KEY"] = (effective_env.get("OLLAMA_API_KEY") or "").strip()
     errors: List[str] = []
 
     # Catch likely misspelled keys in .env
@@ -155,7 +161,7 @@ def _validate_env_preconditions(task_type: str, dotenv: Dict[str, str]):
             errors.append(f"Unknown .env key '{key}'. Did you mean '{suggestion[0]}'?")
 
     required_by_task = {
-        "mining": ["OPENAI_API_KEY", "OPENAI_BASE_URL", "CHAT_MODEL", "REASONING_MODEL", "DATA_RESULTS_DIR"],
+        "mining": ["OLLAMA_API_KEY", "OPENAI_BASE_URL", "CHAT_MODEL", "REASONING_MODEL", "DATA_RESULTS_DIR"],
         "backtest": [],
     }
     for key in required_by_task.get(task_type, []):
@@ -205,6 +211,10 @@ def _load_dotenv_dict() -> Dict[str, str]:
             if "=" in stripped:
                 key, _, val = stripped.partition("=")
                 env[key.strip()] = _strip_wrapping_quotes(val)
+    if not (env.get("OLLAMA_API_KEY") or "").strip() and (env.get("OPENAI_API_KEY") or "").strip():
+        env["OLLAMA_API_KEY"] = env["OPENAI_API_KEY"]
+    if not (env.get("OPENAI_API_KEY") or "").strip() and (env.get("OLLAMA_API_KEY") or "").strip():
+        env["OPENAI_API_KEY"] = env["OLLAMA_API_KEY"]
     return env
 
 

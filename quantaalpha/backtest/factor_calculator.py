@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sys
 import tempfile
 import subprocess
@@ -188,8 +189,13 @@ Only the following operations are allowed in expressions:
             parsed_expr = parse_expression(parsed_expr)
             
             for col in df.columns:
-                if col.startswith('$'):
-                    parsed_expr = parsed_expr.replace(col[1:], f"df['{col}']")
+                col_name = str(col)
+                base_name = col_name[1:] if col_name.startswith('$') else col_name
+                parsed_expr = re.sub(
+                    rf"(?<![A-Za-z0-9_\$])\$?{re.escape(base_name)}(?![A-Za-z0-9_])",
+                    f"df[{col_name!r}]",
+                    parsed_expr,
+                )
             
             exec_globals = {
                 'df': df,
@@ -405,4 +411,3 @@ class QlibDataProvider:
         logger.info(f"Loaded stock data: {len(df)} rows")
         
         return df
-

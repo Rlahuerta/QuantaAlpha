@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sys
 import warnings
 from pathlib import Path
@@ -218,8 +219,13 @@ class CustomFactorCalculator:
                 _sys.stdout = old_stdout
             
             for col in df.columns:
-                if col.startswith('$'):
-                    expr = expr.replace(col[1:], f"df['{col}']")
+                col_name = str(col)
+                base_name = col_name[1:] if col_name.startswith('$') else col_name
+                expr = re.sub(
+                    rf"(?<![A-Za-z0-9_\$])\$?{re.escape(base_name)}(?![A-Za-z0-9_])",
+                    f"df[{col_name!r}]",
+                    expr,
+                )
             
             exec_globals = {
                 'df': df,
@@ -530,8 +536,13 @@ class CustomFactorDataLoader:
         expr = parse_expression(expr)
         
         for col in df.columns:
-            if col.startswith('$'):
-                expr = expr.replace(col[1:], f"df['{col}']")
+            col_name = str(col)
+            base_name = col_name[1:] if col_name.startswith('$') else col_name
+            expr = re.sub(
+                rf"(?<![A-Za-z0-9_\$])\$?{re.escape(base_name)}(?![A-Za-z0-9_])",
+                f"df[{col_name!r}]",
+                expr,
+            )
         
         exec_globals = {'df': df, 'np': np, 'pd': pd}
         for name in dir(func_lib):

@@ -103,7 +103,7 @@ Minimum required values in `.env`:
 
 - `QLIB_DATA_DIR`
 - `DATA_RESULTS_DIR`
-- `OPENAI_API_KEY`
+- `OLLAMA_API_KEY`
 - `OPENAI_BASE_URL`
 - `CHAT_MODEL`
 - `REASONING_MODEL`
@@ -129,7 +129,7 @@ Place HDF5 files into:
 
 ```bash
 # Cloud model list
-curl -sS https://ollama.com/v1/models -H "Authorization: Bearer $OPENAI_API_KEY" | head
+curl -sS https://ollama.com/v1/models -H "Authorization: Bearer $OLLAMA_API_KEY" | head
 
 # Local embedding models
 ollama list | grep -E "mxbai-embed-large|nomic-embed-text"

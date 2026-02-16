@@ -13,6 +13,8 @@ dependencies:
   - pip>=24
   - git
   - nodejs>=20
+  - xgboost=3.2.0
+  - catboost=1.2.8
   - pip:
       - -r requirements.txt
       - -r requirements/test.txt
@@ -27,7 +29,7 @@ variables:
 
   # Chat/Reasoning via Ollama Cloud (OpenAI-compatible endpoint)
   OPENAI_BASE_URL: https://ollama.com/v1
-  OPENAI_API_KEY: <your_ollama_cloud_api_key>
+  OLLAMA_API_KEY: <your_ollama_cloud_api_key>
   CHAT_MODEL: minimax-m2.5
   REASONING_MODEL: minimax-m2.5
 
@@ -45,3 +47,4 @@ variables:
   USE_LOCAL: "True"
   MAX_RETRY: "5"
   RETRY_WAIT_SECONDS: "5"
+  MLFLOW_DISABLE_TELEMETRY: "True"

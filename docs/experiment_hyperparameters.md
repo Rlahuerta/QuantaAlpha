@@ -9,7 +9,7 @@ Key environment variables:
 ```bash
 REASONING_MODEL=<model_name>
 CHAT_MODEL=<model_name>
-OPENAI_API_KEY=<api_key>
+OLLAMA_API_KEY=<api_key>
 OPENAI_BASE_URL=<base_url>
 ```
 

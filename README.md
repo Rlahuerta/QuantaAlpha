@@ -132,7 +132,7 @@ QLIB_DATA_DIR=/path/to/your/qlib/cn_data      # Qlib data directory
 DATA_RESULTS_DIR=/path/to/your/results         # Output directory
 
 # === Required: LLM API ===
-OPENAI_API_KEY=your-api-key
+OLLAMA_API_KEY=your-api-key
 OPENAI_BASE_URL=https://your-llm-provider/v1   # e.g. DashScope, OpenAI
 CHAT_MODEL=deepseek-v3                         # or gpt-4, qwen-max, etc.
 REASONING_MODEL=deepseek-v3
@@ -143,7 +143,7 @@ REASONING_MODEL=deepseek-v3
 ```bash
 # Cloud chat/reasoning
 OPENAI_BASE_URL=https://ollama.com/v1
-OPENAI_API_KEY=<your_ollama_cloud_api_key>
+OLLAMA_API_KEY=<your_ollama_cloud_api_key>
 CHAT_MODEL=minimax-m2.5
 REASONING_MODEL=minimax-m2.5
 
@@ -162,7 +162,7 @@ FACTOR_CoSTEER_DATA_FOLDER_DEBUG=/abs/path/to/git_ignore_folder/factor_implement
 ```bash
 # 1) Cloud model reachable
 curl -sS https://ollama.com/v1/models \
-  -H "Authorization: Bearer $OPENAI_API_KEY" | head
+  -H "Authorization: Bearer $OLLAMA_API_KEY" | head
 
 # 2) Local embedding models available
 ollama list | grep -E "mxbai-embed-large|nomic-embed-text"

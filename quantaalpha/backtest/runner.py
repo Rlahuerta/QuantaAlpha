@@ -6,6 +6,7 @@ Modes: official (Qlib DataLoader) or custom (expr_parser + function_lib).
 
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -17,6 +18,8 @@ import yaml
 
 project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root))
+# Disable MLflow telemetry by default for local/backtest runs; can be overridden by env.
+os.environ.setdefault("MLFLOW_DISABLE_TELEMETRY", "true")
 
 logger = logging.getLogger(__name__)
 
