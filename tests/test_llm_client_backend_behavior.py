@@ -1,10 +1,19 @@
+import json
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 import quantaalpha.llm.client as llm_client_module
 from quantaalpha.core.utils import SingletonBaseClass
-from quantaalpha.llm.client import APIBackend
+from quantaalpha.llm.client import (
+    APIBackend,
+    ChatSession,
+    ConvManager,
+    SQliteLazyCache,
+    SessionChatHistoryCache,
+    calculate_embedding_distance_between_str_list,
+)
 
 
 class FakeBadRequestError(Exception):
@@ -239,3 +248,169 @@ def test_backend_falls_back_to_openai_api_key_env(monkeypatch, _patch_llm_settin
     backend = _build_backend_without_explicit_keys()
 
     assert backend.chat_api_key == "openai-key"
+
+
+def test_conv_manager_rotates_files_and_appends_latest(tmp_path):
+    conv_dir = tmp_path / "llm_conv"
+    conv_dir.mkdir(parents=True, exist_ok=True)
+    (conv_dir / "0.json").write_text(json.dumps([["u0"], "a0"]), encoding="utf-8")
+    (conv_dir / "1.json").write_text(json.dumps([["u1"], "a1"]), encoding="utf-8")
+
+    manager = ConvManager(path=conv_dir, recent_n=2)
+    manager.append((["new"], "answer"))
+
+    assert (conv_dir / "0.json").exists()
+    assert (conv_dir / "1.json").exists()
+    assert (conv_dir / "2.json").exists()
+    assert json.loads((conv_dir / "0.json").read_text(encoding="utf-8")) == [["new"], "answer"]
+
+
+def test_sqlite_lazy_cache_roundtrip(tmp_path):
+    cache = SQliteLazyCache(cache_location=str(tmp_path / "cache.db"))
+
+    assert cache.chat_get("missing") is None
+    assert cache.embedding_get("missing") is None
+    assert cache.message_get("missing") == []
+
+    cache.chat_set("k", "v")
+    cache.embedding_set({"emb-k": [0.1, 0.2]})
+    cache.message_set("cid", [{"role": "user", "content": "hello"}])
+
+    assert cache.chat_get("k") == "v"
+    assert cache.embedding_get("emb-k") == [0.1, 0.2]
+    assert cache.message_get("cid")[-1]["content"] == "hello"
+
+
+def test_chat_session_builds_and_persists_history(monkeypatch, tmp_path):
+    monkeypatch.setattr(llm_client_module.LLM_SETTINGS, "prompt_cache_path", str(tmp_path / "session_cache.db"))
+    monkeypatch.setattr(llm_client_module.LLM_SETTINGS, "default_system_prompt", "default-system")
+
+    class _FakeBackend:
+        def calculate_token_from_messages(self, messages):
+            return len(messages)
+
+        def _try_create_chat_completion_or_embedding(self, **kwargs):
+            return "assistant-reply"
+
+    session = ChatSession(_FakeBackend(), conversation_id="cid-1", system_prompt="sys-1")
+    prompt_messages = session.build_chat_completion_message("hello")
+    token_count = session.build_chat_completion_message_and_calculate_token("world")
+    response = session.build_chat_completion("hello")
+    history = SessionChatHistoryCache().message_get("cid-1")
+
+    assert prompt_messages[0]["role"] == "system"
+    assert token_count == 2
+    assert response == "assistant-reply"
+    assert history[-1]["role"] == "assistant"
+    assert history[-1]["content"] == "assistant-reply"
+
+
+def test_build_messages_shrink_breaks_and_limit_history(monkeypatch, _patch_llm_settings, _patch_openai):
+    monkeypatch.setattr(llm_client_module.LLM_SETTINGS, "max_past_message_include", 1)
+    backend = _build_backend()
+
+    messages = backend.build_messages(
+        user_prompt="line1\n\n\nline2",
+        system_prompt="sys\n\n\nprompt",
+        former_messages=[
+            {"role": "assistant", "content": "old-1"},
+            {"role": "assistant", "content": "old-2"},
+        ],
+        shrink_multiple_break=True,
+    )
+
+    assert messages[0]["content"] == "sys\n\nprompt"
+    assert messages[1]["content"] == "old-2"
+    assert messages[-1]["content"] == "line1\n\nline2"
+
+
+def test_auto_continue_when_finish_reason_is_length(_patch_llm_settings, _patch_openai):
+    backend = _build_backend()
+    calls = []
+
+    def _fake_inner(messages, **kwargs):
+        calls.append(messages)
+        if len(calls) == 1:
+            return "part-1", "length"
+        return "part-2", "stop"
+
+    backend._create_chat_completion_inner_function = _fake_inner
+    result = backend._create_chat_completion_auto_continue(messages=[{"role": "user", "content": "q"}])
+
+    assert result == "part-1part-2"
+    assert calls[1][-1]["content"] == "continue the former output with no overlap"
+
+
+def test_build_log_messages_truncates_content(_patch_llm_settings, _patch_openai):
+    backend = _build_backend()
+    log_text = backend._build_log_messages(
+        [{"role": "user", "content": "x" * 120}],
+        max_prompt_length=10,
+    )
+
+    assert "Role:" in log_text
+    assert "... [120 chars]" in log_text
+
+
+def test_build_messages_and_create_chat_completion_forwards_kwargs(_patch_llm_settings, _patch_openai):
+    backend = _build_backend()
+    captured = {}
+
+    def _fake_try_create(**kwargs):
+        captured.update(kwargs)
+        return "ok"
+
+    backend._try_create_chat_completion_or_embedding = _fake_try_create
+    result = backend.build_messages_and_create_chat_completion(
+        user_prompt="hello",
+        former_messages=[{"role": "assistant", "content": "before"}],
+        chat_cache_prefix="cache-key",
+        json_mode=True,
+    )
+
+    assert result == "ok"
+    assert captured["chat_completion"] is True
+    assert captured["chat_cache_prefix"] == "cache-key"
+    assert captured["messages"][-1]["content"] == "hello"
+
+
+def test_embedding_inner_function_batches_and_uses_cache(monkeypatch, _patch_llm_settings, _patch_openai):
+    monkeypatch.setattr(llm_client_module.LLM_SETTINGS, "embedding_max_str_num", 2)
+    monkeypatch.setattr(llm_client_module.LLM_SETTINGS, "embedding_batch_wait_seconds", 0)
+
+    backend = APIBackend(
+        chat_api_key="dummy",
+        embedding_api_key="dummy",
+        use_embedding_cache=True,
+        dump_embedding_cache=True,
+    )
+    call_inputs = []
+
+    def _fake_embedding_create(model, input):
+        call_inputs.append(list(input))
+        return SimpleNamespace(
+            data=[SimpleNamespace(embedding=[float(len(text)), float(i)]) for i, text in enumerate(input)]
+        )
+
+    backend.embedding_client.embeddings.create = _fake_embedding_create
+    items = ["a", "bb", "ccc"]
+    first = backend._create_embedding_inner_function(input_content_list=items)
+    second = backend._create_embedding_inner_function(input_content_list=items)
+
+    assert len(first) == 3
+    assert first == second
+    assert call_inputs == [["a", "bb"], ["ccc"]]
+
+
+def test_calculate_embedding_distance_between_lists(monkeypatch):
+    class _FakeBackend:
+        def create_embedding(self, _content):
+            return [[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
+
+    monkeypatch.setattr(llm_client_module, "APIBackend", lambda: _FakeBackend())
+
+    similarity = calculate_embedding_distance_between_str_list(["src"], ["t1", "t2"])
+
+    assert similarity[0][0] == pytest.approx(0.0)
+    assert similarity[0][1] == pytest.approx(1 / np.sqrt(2))
+    assert calculate_embedding_distance_between_str_list([], ["x"]) == [[]]
