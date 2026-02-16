@@ -142,3 +142,121 @@ def test_get_factor_info_variants(tmp_path):
     assert alpha_info["count"] == "dynamic"
     assert custom_info["json_files"] == [custom_file]
     assert unknown_info["description"] == "Unknown factor source"
+
+
+def test_load_factors_alpha_sources_and_alpha360_generation():
+    alpha158_loader = FactorLoader({"factor_source": {"type": "alpha158"}})
+    alpha360_loader = FactorLoader({"factor_source": {"type": "alpha360"}})
+
+    alpha158, alpha158_llm = alpha158_loader.load_factors()
+    alpha360, alpha360_llm = alpha360_loader.load_factors()
+
+    assert len(alpha158) == len(FactorLoader.ALPHA158_FACTORS)
+    assert alpha158_llm == []
+    assert alpha360_llm == []
+    assert "ROC5" in alpha360
+    assert "ROC120" in alpha360
+    assert "KMID" in alpha360
+
+
+def test_load_custom_factors_handles_missing_file_and_max_limit(tmp_path):
+    valid_file = _write_factor_library(
+        tmp_path,
+        {
+            "f1": {"factor_name": "A", "factor_expression": "TS_MEAN($close, 5)"},
+            "f2": {"factor_name": "B", "factor_expression": "TS_SUM($close, 5)"},
+        },
+    )
+    missing_file = str(tmp_path / "missing.json")
+    loader = FactorLoader(
+        {
+            "factor_source": {
+                "type": "custom",
+                "custom": {
+                    "json_files": [missing_file, valid_file],
+                    "max_factors": 1,
+                },
+            }
+        }
+    )
+
+    qlib_compatible, custom_factors = loader.load_factors()
+    assert qlib_compatible == {}
+    assert len(custom_factors) == 1
+
+
+def test_parse_factor_json_quality_filter_and_fallback_needs_llm(tmp_path, monkeypatch):
+    factor_file = _write_factor_library(
+        tmp_path,
+        {
+            "f1": {
+                "factor_name": "Compat",
+                "factor_expression": "TS_MEAN($close, 5)",
+                "quality": "high",
+            },
+            "f2": {
+                "factor_name": "NeedsLLMByPattern",
+                "factor_expression": "RANK($close)",
+                "quality": "high",
+            },
+            "f3": {
+                "factor_name": "NeedsLLMByConvert",
+                "factor_expression": "BLOCK($close)",
+                "quality": "high",
+            },
+            "f4": {
+                "factor_name": "NoExpr",
+                "factor_expression": "",
+                "quality": "high",
+            },
+            "f5": {
+                "factor_name": "FilteredOut",
+                "factor_expression": "TS_MEAN($close, 10)",
+                "quality": "low",
+            },
+        },
+    )
+    loader = FactorLoader({"factor_source": {"type": "custom"}})
+    original_convert = loader._convert_to_qlib_expression
+    monkeypatch.setattr(
+        loader,
+        "_convert_to_qlib_expression",
+        lambda expr: None if "BLOCK(" in expr else original_convert(expr),
+    )
+
+    qlib_compatible, needs_llm = loader._parse_factor_json(factor_file, quality_filter="high")
+
+    assert qlib_compatible["Compat"] == "Mean($close, 5)"
+    names = {item["factor_name"] for item in needs_llm}
+    assert "NeedsLLMByPattern" in names
+    assert "NeedsLLMByConvert" in names
+    assert "NoExpr" not in names
+    assert "FilteredOut" not in names
+
+
+def test_load_combined_factors_handles_unknown_official_source_without_custom():
+    loader = FactorLoader(
+        {
+            "factor_source": {
+                "type": "combined",
+                "combined": {
+                    "official_source": "unknown-source",
+                    "include_custom": False,
+                },
+            }
+        }
+    )
+
+    qlib_compatible, needs_llm = loader.load_factors()
+    assert qlib_compatible == {}
+    assert needs_llm == []
+
+
+def test_get_factor_info_alpha158_variants():
+    alpha158_info = FactorLoader({"factor_source": {"type": "alpha158"}}).get_factor_info()
+    alpha158_20_info = FactorLoader({"factor_source": {"type": "alpha158_20"}}).get_factor_info()
+
+    assert alpha158_info["type"] == "alpha158"
+    assert alpha158_info["count"] == len(FactorLoader.ALPHA158_FACTORS)
+    assert alpha158_20_info["type"] == "alpha158_20"
+    assert alpha158_20_info["count"] == len(FactorLoader.ALPHA158_20_FACTORS)

@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from quantaalpha.backtest.factor_calculator import FactorCalculator
 
@@ -117,3 +118,95 @@ def test_generate_factor_code_rejects_invalid_llm_expression(tmp_path, monkeypat
     )
 
     assert expr is None
+
+
+def test_calculate_factors_requires_data_then_set_data(tmp_path, monkeypatch):
+    config = {
+        "llm": {"enabled": False, "cache_results": False, "cache_dir": str(tmp_path / "cache")},
+        "factor_calculation": {"output_dir": str(tmp_path / "out")},
+    }
+    calc = FactorCalculator(config=config, data_df=None)
+    with pytest.raises(ValueError, match="Data not set"):
+        calc.calculate_factors([{"factor_name": "x", "factor_expression": "TS_MEAN($close, 2)"}])
+
+    calc.set_data(_sample_data())
+    monkeypatch.setattr(calc, "_calculate_with_parser", lambda _expr: pd.Series(1.0, index=calc.data_df.index))
+    result = calc.calculate_factors([{"factor_name": "x", "factor_expression": "TS_MEAN($close, 2)"}])
+    assert "x" in result.columns
+
+
+def test_calculate_with_parser_dataframe_scalar_and_exception_paths(tmp_path, monkeypatch):
+    calc = _build_calculator(tmp_path, llm_enabled=False, cache_results=False)
+
+    import quantaalpha.factors.coder.expr_parser as expr_parser
+
+    monkeypatch.setattr(expr_parser, "parse_symbol", lambda expr, cols: expr)  # noqa: ARG005
+    monkeypatch.setattr(
+        expr_parser,
+        "parse_expression",
+        lambda expr: "pd.DataFrame({'x': np.arange(len(df))}, index=df.index)",  # noqa: ARG005
+    )
+    df_result = calc._calculate_with_parser("dummy")
+    assert isinstance(df_result, pd.Series)
+
+    monkeypatch.setattr(expr_parser, "parse_expression", lambda expr: "1.23")  # noqa: ARG005
+    scalar_result = calc._calculate_with_parser("dummy")
+    assert isinstance(scalar_result, pd.Series)
+    assert (scalar_result == 1.23).all()
+
+    monkeypatch.setattr(expr_parser, "parse_symbol", lambda expr, cols: (_ for _ in ()).throw(ValueError("bad")))  # noqa: ARG005
+    assert calc._calculate_with_parser("dummy") is None
+
+
+def test_calculate_with_llm_cache_none_and_exception_paths(tmp_path, monkeypatch):
+    calc = _build_calculator(tmp_path, llm_enabled=True, cache_results=True)
+    expr = "TS_MEAN($close, 2)"
+    cached = pd.Series(np.arange(len(calc.data_df), dtype=float), index=calc.data_df.index)
+    calc._save_to_cache(expr, cached)
+    assert calc._calculate_with_llm({"factor_name": "cached", "factor_expression": expr}) is not None
+
+    monkeypatch.setattr(calc, "_generate_factor_code", lambda info: None)  # noqa: ARG005
+    assert calc._calculate_with_llm({"factor_name": "none", "factor_expression": "x"}) is None
+
+    monkeypatch.setattr(calc, "_generate_factor_code", lambda info: (_ for _ in ()).throw(RuntimeError("boom")))  # noqa: ARG005
+    assert calc._calculate_with_llm({"factor_name": "err", "factor_expression": "y"}) is None
+
+
+def test_execute_factor_code_cache_io_and_generation_error_paths(tmp_path, monkeypatch):
+    calc = _build_calculator(tmp_path, llm_enabled=True, cache_results=True)
+
+    monkeypatch.setattr(calc, "_calculate_with_parser", lambda expr: (_ for _ in ()).throw(RuntimeError("bad")))  # noqa: ARG005
+    assert calc._execute_factor_code("expr", "name") is None
+
+    bad_expr = "BAD_CACHE_EXPR"
+    bad_key = calc._get_cache_key(bad_expr)
+    bad_cache_file = calc.cache_dir / f"{bad_key}.pkl"
+    bad_cache_file.write_text("not-a-pickle", encoding="utf-8")
+    assert calc._load_from_cache(bad_expr) is None
+
+    monkeypatch.setattr(pd.Series, "to_pickle", lambda self, path: (_ for _ in ()).throw(OSError("io error")))
+    calc._save_to_cache("SAVE_FAIL_EXPR", pd.Series([1.0]))
+
+    class RaisingAPIBackend:
+        def build_messages_and_create_chat_completion(self, **kwargs):
+            raise RuntimeError("api down")
+
+    monkeypatch.setattr("quantaalpha.llm.client.APIBackend", RaisingAPIBackend)
+    assert (
+        calc._generate_factor_code(
+            {
+                "factor_name": "x",
+                "factor_expression": "TS_MEAN($close, 5)",
+                "factor_description": "",
+                "variables": {},
+            }
+        )
+        is None
+    )
+
+
+def test_calculate_factors_continues_after_exception(tmp_path, monkeypatch):
+    calc = _build_calculator(tmp_path, llm_enabled=False, cache_results=False)
+    monkeypatch.setattr(calc, "_calculate_with_parser", lambda expr: (_ for _ in ()).throw(RuntimeError("crash")))  # noqa: ARG005
+    result = calc.calculate_factors([{"factor_name": "boom", "factor_expression": "x"}])
+    assert result.empty
