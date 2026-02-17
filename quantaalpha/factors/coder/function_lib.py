@@ -128,7 +128,8 @@ def PERCENTILE(df: pd.DataFrame, q: float, p: int = None):
     """
     Quantile of given data. q in [0,1]; if p given, rolling quantile.
     """
-    assert 0 <= q <= 1, "Quantile q must be in [0, 1]"
+    if not (0 <= q <= 1):
+        raise ValueError("Quantile q must be in [0, 1]")
     
     if p is not None:
         return df.groupby('instrument').transform(lambda x: x.rolling(p, min_periods=1).quantile(q))

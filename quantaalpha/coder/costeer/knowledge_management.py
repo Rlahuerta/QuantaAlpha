@@ -343,7 +343,7 @@ class CoSTEERRAGStrategyV2(RAGStrategy):
                 ),
             )["component_no_list"]
             return [all_component_nodes[index - 1] for index in sorted(list(set(component_no_list)))]
-        except:
+        except (json.JSONDecodeError, IndexError, KeyError, TypeError):
             logger.warning("Error when analyzing components.")
             analyze_component_user_prompt = "Your response is not a valid component index list."
 

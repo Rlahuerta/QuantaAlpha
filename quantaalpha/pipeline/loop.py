@@ -36,12 +36,16 @@ from quantaalpha.core.exception import CoderError
 from quantaalpha.log import logger
 from functools import wraps
 
-# Decorator: check stop_event before invoking the function
+# Module-level stop event (initialized to None)
+STOP_EVENT = None
+
 
 def stop_event_check(func):
     @wraps(func)
     def wrapper(self, *args, **kwargs):
-        if STOP_EVENT is not None and STOP_EVENT.is_set():
+        # Check instance-level stop_event first, then fall back to global
+        stop_event = getattr(self, '_stop_event', None) or STOP_EVENT
+        if stop_event is not None and stop_event.is_set():
             raise Exception("Operation stopped due to stop_event flag.")
         return func(self, *args, **kwargs)
     return wrapper

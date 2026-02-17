@@ -31,12 +31,55 @@ class BacktestRunner:
         self.config_path = Path(config_path)
         self.config = self._load_config()
         self._qlib_initialized = False
+        self._parquet_prices_cache = None
+        self._parquet_benchmark_cache = None
 
     def _load_config(self) -> Dict:
         with open(self.config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
         logger.info(f"Loaded config: {self.config_path}")
         return config
+
+    def _get_parquet_bundle_dir(self) -> Optional[Path]:
+        parquet_dir = (self.config.get("data", {}) or {}).get("parquet_bundle_dir")
+        if not parquet_dir:
+            return None
+        p = Path(parquet_dir)
+        if not p.is_absolute():
+            p = (Path(__file__).resolve().parents[2] / p).resolve()
+        return p if p.exists() else None
+
+    def _load_parquet_prices(self) -> Optional[pd.DataFrame]:
+        if self._parquet_prices_cache is not None:
+            return self._parquet_prices_cache
+        bundle = self._get_parquet_bundle_dir()
+        if not bundle:
+            return None
+        prices_path = bundle / "sp500_prices.parquet"
+        if not prices_path.exists():
+            return None
+        df = pd.read_parquet(prices_path)
+        if "datetime" in df.columns:
+            df["datetime"] = pd.to_datetime(df["datetime"]).dt.normalize()
+        if "symbol" in df.columns:
+            df["symbol"] = df["symbol"].astype(str)
+        self._parquet_prices_cache = df
+        return df
+
+    def _load_parquet_benchmark(self) -> Optional[pd.DataFrame]:
+        if self._parquet_benchmark_cache is not None:
+            return self._parquet_benchmark_cache
+        bundle = self._get_parquet_bundle_dir()
+        if not bundle:
+            return None
+        bench_path = bundle / "benchmark_gspc.parquet"
+        if not bench_path.exists():
+            return None
+        df = pd.read_parquet(bench_path)
+        if "datetime" in df.columns:
+            df["datetime"] = pd.to_datetime(df["datetime"]).dt.normalize()
+        self._parquet_benchmark_cache = df
+        return df
 
     def _init_qlib(self):
         if self._qlib_initialized:
@@ -452,6 +495,24 @@ class BacktestRunner:
     
     def _compute_label(self, label_expr: str) -> pd.DataFrame:
         """Compute label using Qlib (label requires look-ahead)."""
+        parquet_prices = self._load_parquet_prices()
+        if parquet_prices is not None and {"datetime", "symbol", "close"}.issubset(parquet_prices.columns):
+            df = parquet_prices[["datetime", "symbol", "close"]].copy()
+            df = df.sort_values(["symbol", "datetime"])
+            # Match label: Ref($close, -2) / Ref($close, -1) - 1
+            close_t1 = df.groupby("symbol")["close"].shift(-1)
+            close_t2 = df.groupby("symbol")["close"].shift(-2)
+            label = (close_t2 / close_t1) - 1
+            out = pd.DataFrame(
+                {"LABEL0": label.values},
+                index=pd.MultiIndex.from_arrays(
+                    [df["symbol"].values, df["datetime"].values],
+                    names=["instrument", "datetime"],
+                ),
+            )
+            logger.debug(f"  Label rows from parquet: {len(out)}")
+            return out
+
         from qlib.data import D
         
         data_config = self.config['data']
@@ -473,6 +534,66 @@ class BacktestRunner:
         logger.debug(f"  Label rows: {len(label_df)}")
         
         return label_df
+
+    def _compute_portfolio_metrics_from_parquet(self, pred: pd.Series, strategy_config: Dict) -> Dict:
+        prices = self._load_parquet_prices()
+        bench = self._load_parquet_benchmark()
+        if prices is None or bench is None:
+            return {}
+        if not isinstance(pred, pd.Series) or not isinstance(pred.index, pd.MultiIndex):
+            return {}
+
+        pred_df = pred.rename("score").reset_index()
+        cols = list(pred_df.columns)
+        dt_col = "datetime" if "datetime" in cols else cols[0]
+        inst_col = "instrument" if "instrument" in cols else cols[1]
+        pred_df[dt_col] = pd.to_datetime(pred_df[dt_col]).dt.normalize()
+        pred_df[inst_col] = pred_df[inst_col].astype(str)
+        pred_df = pred_df.rename(columns={dt_col: "datetime", inst_col: "symbol"})
+
+        px = prices[["datetime", "symbol", "open"]].copy()
+        px = px.sort_values(["symbol", "datetime"])
+        px["next_ret"] = px.groupby("symbol")["open"].shift(-1) / px["open"] - 1
+        merged = pred_df.merge(px[["datetime", "symbol", "next_ret"]], on=["datetime", "symbol"], how="left")
+        merged = merged.dropna(subset=["next_ret", "score"])
+        if merged.empty:
+            return {}
+
+        topk = int(strategy_config.get("kwargs", {}).get("topk", 50))
+
+        def _daily_ret(g: pd.DataFrame) -> float:
+            return float(g.nlargest(topk, "score")["next_ret"].mean())
+
+        strat_ret = merged.groupby("datetime", sort=True).apply(_daily_ret)
+
+        b = bench[["datetime", "open"]].copy().sort_values("datetime")
+        b["bench_ret"] = b["open"].shift(-1) / b["open"] - 1
+        bench_ret = b.set_index("datetime")["bench_ret"].dropna()
+
+        common_dt = strat_ret.index.intersection(bench_ret.index)
+        if len(common_dt) == 0:
+            return {}
+
+        excess = (strat_ret.loc[common_dt] - bench_ret.loc[common_dt]).dropna()
+        if excess.empty:
+            return {}
+
+        from qlib.contrib.evaluate import risk_analysis
+
+        analysis = risk_analysis(excess)
+        if isinstance(analysis, pd.DataFrame):
+            analysis = analysis["risk"] if "risk" in analysis.columns else analysis.iloc[:, 0]
+
+        ann_ret = float(analysis.get("annualized_return", 0))
+        info_ratio = float(analysis.get("information_ratio", 0))
+        max_dd = float(analysis.get("max_drawdown", 0))
+        calmar = ann_ret / abs(max_dd) if max_dd != 0 else 0.0
+        return {
+            "annualized_return": ann_ret,
+            "information_ratio": info_ratio,
+            "max_drawdown": max_dd,
+            "calmar_ratio": float(calmar),
+        }
     
     def _load_qlib_factors(self, factor_expressions: Dict[str, str]) -> Optional[pd.DataFrame]:
         """Load Qlib-compatible factors."""
@@ -692,6 +813,10 @@ class BacktestRunner:
                             
             except Exception as e:
                 logger.warning(f"Portfolio backtest failed: {e}")
+                fallback_metrics = self._compute_portfolio_metrics_from_parquet(pred, strategy_config)
+                if fallback_metrics:
+                    metrics.update(fallback_metrics)
+                    logger.warning("Portfolio metrics fallback used: parquet bundle approximation")
                 import traceback
                 traceback.print_exc()
         
@@ -751,7 +876,7 @@ class BacktestRunner:
             try:
                 with open(summary_file, 'r', encoding='utf-8') as f:
                     summary_data = json.load(f)
-            except:
+            except (json.JSONDecodeError, IOError, OSError):
                 summary_data = []
         
         ann_ret = metrics.get('annualized_return')

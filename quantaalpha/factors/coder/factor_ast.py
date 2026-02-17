@@ -1,4 +1,4 @@
-from pyparsing import Word, alphas, alphanums, infixNotation, opAssoc, oneOf, Optional, delimitedList, Forward, Group
+from pyparsing import Word, alphas, alphanums, infixNotation, opAssoc, one_of, Optional, delimitedList, Forward, Group
 from pyparsing import ParserElement, ParseException, ParseResults
 from pyparsing import Regex, Combine, Literal
 from dataclasses import dataclass
@@ -8,7 +8,7 @@ import sys
 import pandas as pd
 
 # Enable packrat parsing for better performance
-ParserElement.enablePackrat()
+ParserElement.enable_packrat()
 
 # Set higher recursion limit for complex expressions
 sys.setrecursionlimit(4000)
@@ -130,11 +130,11 @@ var = Combine(Optional(Literal("$")) + Word(alphas, alphanums + "_"))
 number = Regex(r"[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?")
 
 # Operators definition
-mul_div = oneOf("* /")
-add_sub = oneOf("+ -")
-comparison = oneOf("> < >= <= == !=")
-logical_and = oneOf("&& &")
-logical_or = oneOf("|| |")
+mul_div = one_of("* /")
+add_sub = one_of("+ -")
+comparison = one_of("> < >= <= == !=")
+logical_and = one_of("&& &")
+logical_or = one_of("|| |")
 conditional = ("?", ":")
 
 def create_var_node(tokens):

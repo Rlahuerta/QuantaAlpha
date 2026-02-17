@@ -20,7 +20,6 @@ import tiktoken
 
 from quantaalpha.core.utils import LLM_CACHE_SEED_GEN, SingletonBaseClass
 from quantaalpha.log import LogColors, logger
-from quantaalpha.log import logger
 from quantaalpha.llm.config import LLM_SETTINGS
 
 DEFAULT_QLIB_DOT_PATH = Path("./")
@@ -421,7 +420,8 @@ class APIBackend:
             self.gcr_endpoint_top_p = LLM_SETTINGS.gcr_endpoint_top_p
             self.gcr_endpoint_do_sample = LLM_SETTINGS.gcr_endpoint_do_sample
             self.gcr_endpoint_max_token = LLM_SETTINGS.gcr_endpoint_max_token
-            if not os.environ.get("PYTHONHTTPSVERIFY", "") and hasattr(ssl, "_create_unverified_context"):
+            # Only disable if explicitly requested (for development/testing)
+            if os.environ.get("PYTHONHTTPSVERIFY", "1") == "0" and hasattr(ssl, "_create_unverified_context"):
                 ssl._create_default_https_context = ssl._create_unverified_context  # noqa: SLF001
             self.chat_model_map = json.loads(LLM_SETTINGS.chat_model_map)
             self.chat_model = LLM_SETTINGS.chat_model if chat_model is None else chat_model

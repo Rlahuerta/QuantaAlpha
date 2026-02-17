@@ -26,11 +26,13 @@ class FactorTask(CoSTEERTask):
         factor_formulation,
         factor_expression = None,
         *args,
-        variables: dict = {},
+        variables: dict = None,
         resource: str = None,
         factor_implementation: bool = False,
         **kwargs,
     ) -> None:
+        if variables is None:
+            variables = {}
         self.factor_name = (
             factor_name  # TODO: remove it in the later version. Keep it only for pickle version compatibility
         )
@@ -176,8 +178,8 @@ class FactorFBWorkspace(FBWorkspace):
                     env['PYTHONPATH'] = pythonpath
                 
                 subprocess.check_output(
-                    f"{FACTOR_COSTEER_SETTINGS.python_bin} {execution_code_path}",
-                    shell=True,
+                    [FACTOR_COSTEER_SETTINGS.python_bin, str(execution_code_path)],
+                    shell=False,
                     cwd=self.workspace_path,
                     stderr=subprocess.STDOUT,
                     timeout=FACTOR_COSTEER_SETTINGS.file_based_execution_timeout,
