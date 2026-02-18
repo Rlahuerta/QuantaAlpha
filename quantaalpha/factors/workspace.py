@@ -6,6 +6,7 @@ base files (read_exp_res.py, etc.) still from rdagent; init empty git repo in wo
 """
 
 import subprocess
+import sys
 import os
 from pathlib import Path
 
@@ -26,6 +27,17 @@ class QlibFBWorkspace(_RdagentQlibFBWorkspace):
         if _CUSTOM_TEMPLATE_DIR.exists():
             self.inject_code_from_folder(_CUSTOM_TEMPLATE_DIR)
             logger.info(f"Overrode rdagent default config with project template: {_CUSTOM_TEMPLATE_DIR}")
+
+    def execute(self, qlib_config_name: str = "conf.yaml", run_env: dict = {}, *args, **kwargs):
+        """Execute qlib backtest, ensuring conda env bin is on PATH for qrun/python."""
+        # CondaConf.change_bin_path() runs `conda run -n <env>` via /bin/sh which lacks
+        # conda on PATH => bin_path stays "" => qrun/python not found in LocalEnv.
+        # Fix: include the current interpreter's bin dir in run_env PATH so LocalEnv
+        # appends it (path = [bin_path, /bin/, /usr/bin/, *run_env.get("PATH")])
+        if "PATH" not in run_env:
+            conda_bin = str(Path(sys.executable).parent)
+            run_env = {**run_env, "PATH": conda_bin + os.pathsep + os.environ.get("PATH", "")}
+        return super().execute(qlib_config_name=qlib_config_name, run_env=run_env, *args, **kwargs)
 
     def before_execute(self) -> None:
         """Init workspace prerequisites before qlib backtest execution."""

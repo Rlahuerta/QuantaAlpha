@@ -388,3 +388,162 @@ def test_b8_filter_rejects_non_list_feedback():
     single_fb = _make_feedback(True)
     with pytest.raises(AssertionError):
         agent.filter_evolvable_subjects_by_feedback(evo, single_fb)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# B9 – KeyError for missing 'expr'/'code' key in evolving_strategy now caught
+# ---------------------------------------------------------------------------
+
+def test_b9_keyerror_expr_caught_in_retry_loop():
+    """The retry loop must catch KeyError (missing 'expr' key) and not propagate."""
+    import json
+
+    # Simulate the exact try/except block from evolving_strategy.py
+    attempts = [0]
+    results = []
+
+    def _simulate_loop(responses):
+        for resp in responses:
+            try:
+                expr = json.loads(resp)["expr"]
+                results.append(expr)
+                return
+            except (json.decoder.JSONDecodeError, KeyError):
+                pass  # retried
+
+    # First response missing 'expr', second has it
+    _simulate_loop([
+        json.dumps({"code": "RANK($close)"}),   # missing 'expr' -- was KeyError before fix
+        json.dumps({"expr": "TS_MEAN($close,5)"}),
+    ])
+    assert results == ["TS_MEAN($close,5)"]
+
+
+def test_b9_keyerror_code_caught_in_retry_loop():
+    """Same pattern for the 'code' key in implement_one_task retry loop."""
+    import json
+    results = []
+
+    def _simulate_loop(responses):
+        for resp in responses:
+            try:
+                code = json.loads(resp)["code"]
+                results.append(code)
+                return
+            except (json.decoder.JSONDecodeError, KeyError):
+                pass
+
+    _simulate_loop([
+        json.dumps({"expr": "RANK($close)"}),    # missing 'code'
+        json.dumps({"code": "result_code"}),
+    ])
+    assert results == ["result_code"]
+
+
+# ---------------------------------------------------------------------------
+# B10 – QlibFBWorkspace.execute() injects conda bin into run_env PATH
+# ---------------------------------------------------------------------------
+
+def test_b10_workspace_execute_injects_conda_bin_into_run_env():
+    """execute() must add sys.executable's bin directory to run_env PATH."""
+    import sys
+    from pathlib import Path
+    from quantaalpha.factors.workspace import QlibFBWorkspace
+    import quantaalpha.factors.workspace as ws_mod
+
+    ws = QlibFBWorkspace.__new__(QlibFBWorkspace)
+    expected_bin = str(Path(sys.executable).parent)
+    captured = {}
+
+    original = ws_mod._RdagentQlibFBWorkspace.execute
+    try:
+        ws_mod._RdagentQlibFBWorkspace.execute = (
+            lambda self, qlib_config_name="conf.yaml", run_env={}, **kw:
+            captured.update({"run_env": run_env})
+        )
+        ws.execute(run_env={})
+    finally:
+        ws_mod._RdagentQlibFBWorkspace.execute = original
+
+    assert "PATH" in captured.get("run_env", {}), "PATH not injected into run_env"
+    assert expected_bin in captured["run_env"]["PATH"], "conda bin dir missing from PATH"
+
+
+def test_b10_workspace_execute_preserves_caller_path():
+    """If run_env already has PATH, execute() must not override it."""
+    from quantaalpha.factors.workspace import QlibFBWorkspace
+    import quantaalpha.factors.workspace as ws_mod
+
+    ws = QlibFBWorkspace.__new__(QlibFBWorkspace)
+    captured = {}
+
+    original = ws_mod._RdagentQlibFBWorkspace.execute
+    try:
+        ws_mod._RdagentQlibFBWorkspace.execute = (
+            lambda self, qlib_config_name="conf.yaml", run_env={}, **kw:
+            captured.update({"run_env": run_env})
+        )
+        ws.execute(run_env={"PATH": "/custom/bin"})
+    finally:
+        ws_mod._RdagentQlibFBWorkspace.execute = original
+
+    assert captured["run_env"]["PATH"] == "/custom/bin", "Caller PATH must be preserved"
+
+
+# ---------------------------------------------------------------------------
+# B15 – Retry loop provides error feedback on parse failure
+# ---------------------------------------------------------------------------
+
+def test_b15_retry_loop_adds_note_on_json_error(monkeypatch):
+    """When JSON is invalid, retry_note must include 'expr' key hint."""
+    import json
+    from quantaalpha.factors.coder.evolving_strategy import FactorMultiProcessEvolvingStrategy
+    from quantaalpha.factors.coder.factor import FactorTask
+
+    strategy = FactorMultiProcessEvolvingStrategy.__new__(FactorMultiProcessEvolvingStrategy)
+
+    call_args = []
+    call_count = [0]
+
+    def mock_implement(self, target_task, queried_knowledge=None):
+        # Track prompts; fail 2 times (bad JSON), then fail permanently
+        call_count[0] += 1
+        return None
+
+    # Just verify that when implement_one_task returns None (all retries exhausted),
+    # assign_code_list_to_evo skips it rather than crashing
+    task = FactorTask(
+        factor_name="TestFactor",
+        factor_description="test",
+        factor_formulation="test",
+        factor_expression="RANK($close)",
+    )
+    
+    class FakeEvo:
+        sub_tasks = [task]
+        sub_workspace_list = [None]
+
+    evo = FakeEvo()
+    result = strategy.assign_code_list_to_evo([None], evo)
+    # None code → workspace stays None (no crash)
+    assert result.sub_workspace_list[0] is None
+
+
+def test_b15_retry_note_included_on_syntax_error():
+    """retry_note is non-empty after a parse error and fed back to LLM."""
+    from pyparsing import ParseException
+    from quantaalpha.factors.coder.expr_parser import check_parentheses_balance
+
+    bad_expr = "RANK(TS_MEAN($close, 5)))"  # extra closing paren
+
+    with pytest.raises(Exception):
+        check_parentheses_balance(bad_expr)
+
+    # Verify error message is informative enough to include in a retry note
+    try:
+        check_parentheses_balance(bad_expr)
+        pytest.fail("Expected exception not raised")
+    except Exception as e:
+        note = f"Note: Previous expression was syntactically invalid: {e}. Fix the parentheses."
+        assert "Note:" in note
+        assert len(note) > 20

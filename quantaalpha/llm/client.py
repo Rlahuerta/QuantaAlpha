@@ -563,13 +563,14 @@ class APIBackend:
         try:
             return tiktoken.encoding_for_model(model)
         except KeyError:
-            logger.warning(f"Failed to get encoder. Trying to patch the model name")
-            for patch_func in [_azure_patch]:
-                try:
-                    return tiktoken.encoding_for_model(patch_func(model))
-                except KeyError:
-                    logger.error(f"Failed to get encoder even after patching with {patch_func.__name__}")
-                    raise
+            try:
+                return tiktoken.encoding_for_model(_azure_patch(model))
+            except KeyError:
+                pass
+        # Non-OpenAI models (Ollama, etc.) are not in tiktoken's registry;
+        # fall back to cl100k_base which gives a reasonable token count.
+        logger.warning(f"Model '{model}' not in tiktoken registry; using cl100k_base for token counting.")
+        return tiktoken.get_encoding("cl100k_base")
 
     def build_chat_session(
         self,
@@ -937,10 +938,8 @@ class APIBackend:
 
         encoder = self.encoder
         if encoder is None:
-            try:
-                encoder = self._get_encoder()
-            except (KeyError, Exception):
-                encoder = tiktoken.get_encoding("cl100k_base")
+            encoder = self._get_encoder()
+            self.encoder = encoder  # cache so _get_encoder is only called once
 
         if "gpt4" in self.chat_model or "gpt-4" in self.chat_model:
             tokens_per_message = 3

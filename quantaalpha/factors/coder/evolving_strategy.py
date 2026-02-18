@@ -14,6 +14,7 @@ from quantaalpha.coder.costeer.knowledge_management import (
 )
 from quantaalpha.factors.coder.config import FACTOR_COSTEER_SETTINGS
 from quantaalpha.factors.coder.factor import FactorFBWorkspace, FactorTask
+from quantaalpha.factors.coder.expr_parser import check_parentheses_balance
 from quantaalpha.core.prompts import Prompts
 from quantaalpha.core.template import CodeTemplate
 from quantaalpha.llm.config import LLM_SETTINGS
@@ -172,20 +173,21 @@ class FactorMultiProcessEvolvingStrategy(MultiProcessEvolvingStrategy):
                 queried_similar_successful_knowledge_to_render = queried_similar_successful_knowledge_to_render[:-1]
             elif len(queried_similar_error_knowledge_to_render) > 0:
                 queried_similar_error_knowledge_to_render = queried_similar_error_knowledge_to_render[:-1]
+        retry_note = ""
         for _ in range(10):
             try:
+                prompt = user_prompt + retry_note if retry_note else user_prompt
                 code = json.loads(
                     APIBackend(
                         use_chat_cache=FACTOR_COSTEER_SETTINGS.coder_use_cache
                     ).build_messages_and_create_chat_completion(
-                        user_prompt=user_prompt, system_prompt=system_prompt, json_mode=True
+                        user_prompt=prompt, system_prompt=system_prompt, json_mode=True
                     )
                 )["code"]
                 return code
-            except json.decoder.JSONDecodeError:
-                pass
-        else:
-            return ""  # return empty code if failed to get code after 10 attempts
+            except (json.decoder.JSONDecodeError, KeyError):
+                retry_note = "\nNote: Your response must be valid JSON with a 'code' key containing the Python code."
+        return ""  # return empty code if failed to get code after 10 attempts
 
     def assign_code_list_to_evo(self, code_list, evo):
         for index in range(len(evo.sub_tasks)):
@@ -328,16 +330,24 @@ class FactorParsingStrategy(MultiProcessEvolvingStrategy):
                     # Reduce error cases
                     queried_similar_error_knowledge_to_render = queried_similar_error_knowledge_to_render[:-1]
                     
+            retry_note = ""
             for _ in range(10):
                 try:
+                    prompt = user_prompt + retry_note if retry_note else user_prompt
                     # Call API for new expression
                     expr = json.loads(
                         APIBackend(
                             use_chat_cache=FACTOR_COSTEER_SETTINGS.coder_use_cache
                         ).build_messages_and_create_chat_completion(
-                            user_prompt=user_prompt, system_prompt=system_prompt, json_mode=True, reasoning_flag=False
+                            user_prompt=prompt, system_prompt=system_prompt, json_mode=True, reasoning_flag=False
                         )
                     )["expr"]
+                    
+                    # Sanitize: expressions must be single-line; multi-line = template injection
+                    expr = expr.strip().splitlines()[0].strip()
+                    
+                    # Validate syntax before rendering to avoid putting broken code in factor.py
+                    check_parentheses_balance(expr)
                     
                     # Render code template with new expression
                     rendered_code = code_template.render(
@@ -346,8 +356,10 @@ class FactorParsingStrategy(MultiProcessEvolvingStrategy):
                     )
                     return rendered_code
                     
-                except json.decoder.JSONDecodeError:
-                    pass  # JSON parse failed, retry
+                except (json.decoder.JSONDecodeError, KeyError):
+                    retry_note = "\nNote: Your response must be valid JSON with an 'expr' key containing the factor expression."
+                except Exception as e:
+                    retry_note = f"\nNote: Previous expression was syntactically invalid: {e}. Fix the expression so all parentheses are balanced."
     
     def assign_code_list_to_evo(self, code_list, evo):
         for index in range(len(evo.sub_tasks)):

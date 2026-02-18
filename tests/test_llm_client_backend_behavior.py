@@ -585,13 +585,14 @@ def test_get_encoder_fallback_and_error_paths(monkeypatch, _patch_llm_settings, 
     monkeypatch.setattr(llm_client_module.tiktoken, "encoding_for_model", _encoding_for_model)
     assert backend._get_encoder() == "enc"
 
+    # When all tiktoken lookups fail, _get_encoder falls back to cl100k_base
     monkeypatch.setattr(
         llm_client_module.tiktoken,
         "encoding_for_model",
         lambda model: (_ for _ in ()).throw(KeyError("missing")),
     )
-    with pytest.raises(KeyError):
-        backend._get_encoder()
+    fallback = backend._get_encoder()
+    assert fallback.name == "cl100k_base"
 
 
 def test_build_chat_session_create_embedding_and_token_helper_defaults(_patch_llm_settings, _patch_openai):
