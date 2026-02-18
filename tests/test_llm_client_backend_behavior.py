@@ -604,7 +604,7 @@ def test_build_chat_session_create_embedding_and_token_helper_defaults(_patch_ll
 
     assert backend.create_embedding("s1") == [1.0]
     assert backend.create_embedding(["s1", "s2"]) == [[1.0], [2.0]]
-    assert backend.build_messages_and_calculate_token("u", "s") == 0
+    assert backend.build_messages_and_calculate_token("u", "s") > 0
 
 
 def test_auto_continue_returns_single_response_when_not_length(_patch_llm_settings, _patch_openai):

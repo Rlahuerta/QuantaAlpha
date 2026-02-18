@@ -177,7 +177,7 @@ def test_covariance_and_delay_input_validation_paths():
     with pytest.raises(TypeError):
         TS_COVARIANCE(values, {"bad": "type"}, p=2)
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError):
         DELAY(values, p=-1)
 
 

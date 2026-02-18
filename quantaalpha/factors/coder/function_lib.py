@@ -187,7 +187,8 @@ def ABS(df:pd.DataFrame):
 @datatype_adapter
 def DELAY(df:pd.DataFrame, p:int=1):
     """Delay data by p periods."""
-    assert p >= 0, ValueError("DELAY period must be >= 0 (look-ahead bias)")
+    if p < 0:
+        raise ValueError("DELAY period must be >= 0 (look-ahead bias)")
     return df.groupby('instrument').transform(lambda x: x.shift(p))
 
 

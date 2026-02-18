@@ -603,7 +603,7 @@ class CoSTEERRAGStrategyV2(RAGStrategy):
                 if (
                     target_task_information in self.knowledgebase.working_trace_error_analysis
                     and len(self.knowledgebase.working_trace_error_analysis[target_task_information]) > 0
-                    and len(queried_knowledge_v2.task_to_former_failed_traces[target_task_information]) > 0
+                    and len(queried_knowledge_v2.task_to_former_failed_traces[target_task_information][0]) > 0
                 ):
                     queried_last_trace = queried_knowledge_v2.task_to_former_failed_traces[target_task_information][0][
                         -1

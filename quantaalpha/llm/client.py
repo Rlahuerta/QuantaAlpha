@@ -472,7 +472,8 @@ class APIBackend:
             self.reasoning_model = LLM_SETTINGS.reasoning_model if reasoning_model is None else reasoning_model
             self.chat_model_map = json.loads(LLM_SETTINGS.chat_model_map)
             # self.encoder = self._get_encoder()
-            
+            self.encoder = None
+
             self.chat_api_base = LLM_SETTINGS.chat_azure_api_base if chat_api_base is None else chat_api_base
             self.chat_api_version = (
                 LLM_SETTINGS.chat_azure_api_version if chat_api_version is None else chat_api_version
@@ -930,10 +931,16 @@ class APIBackend:
         return resp, finish_reason
 
     def calculate_token_from_messages(self, messages: list[dict]) -> int:
-        return 0
         if self.use_gcr_endpoint:
             logger.warning("num_tokens_from_messages() is not implemented for gcr endpoint.")
             return 0  # TODO implement this function for gcr endpoint
+
+        encoder = self.encoder
+        if encoder is None:
+            try:
+                encoder = self._get_encoder()
+            except (KeyError, Exception):
+                encoder = tiktoken.get_encoding("cl100k_base")
 
         if "gpt4" in self.chat_model or "gpt-4" in self.chat_model:
             tokens_per_message = 3
@@ -945,7 +952,7 @@ class APIBackend:
         for message in messages:
             num_tokens += tokens_per_message
             for key, value in message.items():
-                num_tokens += len(self.encoder.encode(value))
+                num_tokens += len(encoder.encode(value))
                 if key == "name":
                     num_tokens += tokens_per_name
         num_tokens += 3  # every reply is primed with <start>assistant<message>

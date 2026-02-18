@@ -1,0 +1,390 @@
+"""
+Regression tests for the 8 bugs found and fixed in the bug audit.
+
+B1 - factor_ast.py: SubtreeMatch.__str__ NameError (self.root1/root2 not root1/root2)
+B2 - knowledge_management.py: empty inner list causes IndexError in error_query
+B3 - factor_ast.py: UnaryOpNode not traversed in count/collect helpers
+B4 - llm/client.py: dead `return 0` made calculate_token_from_messages a no-op
+B5 - function_lib.py: assert used instead of raise for DELAY validation (bypassed in -O mode)
+B6 - controller.py: dead assignment self._mutation_idx = len(...) before reset to 0
+B7 - trajectory.py: ellipsis appended unconditionally regardless of string length
+B8 - evolving_agent.py: type annotation listed singular instead of list type
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pandas as pd
+import pytest
+
+# ---------------------------------------------------------------------------
+# B1 – SubtreeMatch.__str__ no longer raises NameError
+# ---------------------------------------------------------------------------
+
+import quantaalpha.factors.coder.factor_ast as ast_module
+
+
+def test_b1_subtree_match_str_no_name_error():
+    """str(SubtreeMatch) must succeed and embed node representations."""
+    node = ast_module.VarNode("$close")
+    match = ast_module.SubtreeMatch(node, node, size=3)
+    result = str(match)
+    assert "$close" in result
+    assert "3" in result
+
+
+# ---------------------------------------------------------------------------
+# B2 – error_query with empty former-trace inner list must not raise IndexError
+# ---------------------------------------------------------------------------
+
+from quantaalpha.coder.costeer.knowledge_management import (
+    CoSTEERKnowledgeBaseV2,
+    CoSTEERQueriedKnowledgeV2,
+    CoSTEERRAGStrategyV2,
+)
+from quantaalpha.coder.costeer.config import CoSTEERSettings
+from quantaalpha.coder.costeer.knowledge_management import UndirectedNode
+
+
+class _SimpleTask:
+    def __init__(self, name: str):
+        self.name = name
+
+    def get_task_information(self) -> str:
+        return self.name
+
+
+class _GraphStub:
+    """Minimal graph stub used only for UndirectedNode lookups."""
+
+    def __init__(self):
+        self._nodes: list = []
+
+    def add_node(self, node):
+        self._nodes.append(node)
+
+    def get_node_by_content(self, content):
+        for n in self._nodes:
+            if n.content == content:
+                return n
+        return None
+
+
+def test_b2_error_query_empty_former_trace_no_index_error():
+    """
+    When task_to_former_failed_traces[key] = ([], None) (empty inner list),
+    error_query must not raise IndexError.
+    Before fix: len(tuple) > 0 is always True (2-tuple), so code accessed tuple[0][-1] → IndexError.
+    After fix:  len(tuple[0]) > 0 correctly skips the empty-list case.
+    """
+    kb = CoSTEERKnowledgeBaseV2()
+    kb.graph = _GraphStub()
+
+    settings = CoSTEERSettings()
+    settings.fail_task_trial_limit = 3
+    settings.v2_query_former_trace_limit = 5
+    settings.v2_query_component_limit = 2
+    settings.v2_query_error_limit = 2
+    settings.v2_knowledge_sampler = 1.0
+    rag = CoSTEERRAGStrategyV2(kb, settings)
+
+    task = _SimpleTask("t-empty-trace")
+    error_node = UndirectedNode(content="ErrorType: ValueError", label="error")
+    kb.graph.add_node(error_node)
+    # Add error analysis for the task (this makes the condition at line 603-606 evaluate
+    # the inner list length guard, which was the bug)
+    kb.working_trace_error_analysis[task.get_task_information()] = [[error_node]]
+    kb.working_trace_knowledge[task.get_task_information()] = []
+
+    queried = CoSTEERQueriedKnowledgeV2()
+    # Simulate the empty-inner-list case (comes from former_trace_query when no traces exist)
+    queried.task_to_former_failed_traces[task.get_task_information()] = ([], None)
+
+    # Must NOT raise IndexError
+    queried = rag.error_query(
+        SimpleNamespace(sub_tasks=[task]),
+        queried,
+        v2_query_error_limit=2,
+        knowledge_sampler=1.0,
+    )
+    # No error queries matched (empty trace → falls back to empty list)
+    assert queried.task_to_similar_error_successful_knowledge[task.get_task_information()] == []
+
+
+# ---------------------------------------------------------------------------
+# B3 – collect_unique_vars / collect_base_features now descend into UnaryOpNode
+# ---------------------------------------------------------------------------
+
+
+def test_b3_collect_unique_vars_descends_into_unary_op():
+    """
+    '-$c' parses as UnaryOpNode('-', VarNode('$c')).
+    Before fix: collect_unique_vars fell through to no-op → $c not collected.
+    After fix:  UnaryOpNode branch is traversed → $c is collected.
+    """
+    tree = ast_module.parse_expression("$a > 1 ? TS_MEAN($b, 3) : -$c")
+    unique_vars: set[str] = set()
+    ast_module.collect_unique_vars(tree, unique_vars)
+    assert "$c" in unique_vars, "collect_unique_vars must descend into UnaryOpNode"
+    assert unique_vars == {"$a", "$b", "$c"}
+
+
+def test_b3_collect_base_features_descends_into_unary_op():
+    """collect_base_features must also include variables inside UnaryOpNode."""
+    tree = ast_module.parse_expression("$a > 1 ? TS_MEAN($b, 3) : -$c")
+    base_features: set[str] = set()
+    ast_module.collect_base_features(tree, base_features)
+    assert "$c" in base_features
+    assert base_features == {"$a", "$b", "$c"}
+
+
+def test_b3_count_unique_vars_includes_unary_op_operand():
+    """count_unique_vars (wraps collect_unique_vars) must count $c from -$c."""
+    # Expression with a unary minus that hides a variable
+    count = ast_module.count_unique_vars("RANK(-$close)")
+    assert count == 1, f"Expected 1 unique var, got {count}"
+
+
+def test_b3_count_nodes_includes_unary_op_node():
+    """count_nodes must count UnaryOpNode itself."""
+    # "-$close" = UnaryOpNode + VarNode = at least 2 nodes
+    tree = ast_module.parse_expression("-$close")
+    total = ast_module.count_all_nodes("-$close")
+    assert total >= 2, f"Expected >= 2 nodes for '-$close', got {total}"
+
+
+# ---------------------------------------------------------------------------
+# B4 – calculate_token_from_messages is no longer a dead no-op
+# ---------------------------------------------------------------------------
+
+from quantaalpha.llm import client as llm_client_module
+from quantaalpha.llm.client import APIBackend, ChatSession
+
+
+@pytest.fixture()
+def _minimal_llm_backend(monkeypatch, tmp_path):
+    settings = llm_client_module.LLM_SETTINGS
+    monkeypatch.setattr(settings, "use_gcr_endpoint", False)
+    monkeypatch.setattr(settings, "use_azure", False)
+    monkeypatch.setattr(settings, "log_llm_chat_content", False)
+    monkeypatch.setattr(settings, "chat_stream", False)
+    monkeypatch.setattr(settings, "chat_model", "gpt-3.5-turbo")
+    monkeypatch.setattr(settings, "reasoning_model", "gpt-3.5-turbo")
+    monkeypatch.setattr(settings, "chat_model_map", "{}")
+    monkeypatch.setattr(settings, "openai_base_url", "http://localhost/v1")
+    monkeypatch.setattr(settings, "embedding_base_url", "http://localhost/v1")
+    monkeypatch.setattr(settings, "ollama_api_key", "dummy")
+    monkeypatch.setattr(settings, "openai_api_key", "dummy")
+    monkeypatch.setattr(settings, "embedding_api_key", "dummy")
+    monkeypatch.setattr(settings, "prompt_cache_path", str(tmp_path / "cache.db"))
+    monkeypatch.setattr(settings, "use_auto_chat_cache_seed_gen", False)
+    monkeypatch.setattr(settings, "max_retry", 1)
+    monkeypatch.setattr(settings, "retry_wait_seconds", 0)
+    return APIBackend(chat_api_key="dummy", embedding_api_key="dummy")
+
+
+def test_b4_token_count_is_not_zero_for_nonempty_message(_minimal_llm_backend):
+    """
+    Before fix: return 0 was the first statement → always returned 0.
+    After fix:  the function counts real tokens; must return > 0 for a non-empty message.
+    """
+    backend = _minimal_llm_backend
+    token_count = backend.build_messages_and_calculate_token(
+        user_prompt="Hello world", system_prompt="You are a helpful assistant."
+    )
+    assert token_count > 0, f"Token count should be > 0, got {token_count}"
+
+
+def test_b4_token_count_grows_with_longer_messages(_minimal_llm_backend):
+    """Token count must grow monotonically with message length."""
+    backend = _minimal_llm_backend
+    short_count = backend.build_messages_and_calculate_token("Hi", "sys")
+    long_count = backend.build_messages_and_calculate_token(
+        "This is a much longer user prompt with many more words.", "sys"
+    )
+    assert long_count > short_count
+
+
+# ---------------------------------------------------------------------------
+# B5 – DELAY with negative period raises ValueError (not passes silently)
+# ---------------------------------------------------------------------------
+
+from quantaalpha.factors.coder.function_lib import DELAY
+
+
+def _sample_series() -> pd.Series:
+    idx = pd.MultiIndex.from_product(
+        [pd.date_range("2024-01-01", periods=3), ["A", "B"]],
+        names=["datetime", "instrument"],
+    )
+    return pd.Series(range(6), index=idx, dtype=float)
+
+
+def test_b5_delay_negative_period_raises_value_error():
+    """
+    Before fix: assert p >= 0, ValueError(...) — the ValueError is just the assert message,
+    so in -O mode the assertion is skipped entirely (look-ahead bias silently allowed).
+    After fix:  raise ValueError is used directly, always enforced.
+    """
+    values = _sample_series()
+    with pytest.raises(ValueError, match="look-ahead"):
+        DELAY(values, p=-1)
+
+
+def test_b5_delay_zero_period_is_valid():
+    """p=0 is allowed (no delay)."""
+    values = _sample_series()
+    result = DELAY(values, p=0)
+    assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# B6 – _mutation_idx reset to 0 after advance_phase_after_parallel_completion(MUTATION)
+# ---------------------------------------------------------------------------
+
+from quantaalpha.pipeline.evolution.controller import EvolutionConfig, EvolutionController
+from quantaalpha.pipeline.evolution.trajectory import RoundPhase
+
+
+def test_b6_mutation_idx_is_zero_after_mutation_phase_advance():
+    """
+    Before fix: dead assignment `self._mutation_idx = len(self._mutation_targets)` existed
+    before the authoritative `self._mutation_idx = 0`.  Although harmless in effect
+    (list was just cleared to []), the dead line was removed.
+    After fix: only `self._mutation_idx = 0` remains; this test confirms the reset occurs.
+    """
+    config = EvolutionConfig(
+        num_directions=1,
+        max_rounds=5,
+        mutation_enabled=True,
+        crossover_enabled=False,
+    )
+    controller = EvolutionController(config)
+
+    # Manually set a non-zero mutation index to make the reset observable
+    controller._mutation_idx = 7
+    controller._mutation_targets = ["a", "b", "c"]
+
+    # Simulate completion of a mutation-phase batch
+    controller.advance_phase_after_parallel_completion([
+        {"phase": RoundPhase.MUTATION, "direction_id": 0, "round_idx": 1}
+    ])
+
+    assert controller._mutation_idx == 0, (
+        f"_mutation_idx should be reset to 0, got {controller._mutation_idx}"
+    )
+    assert controller._mutation_targets == [], (
+        "_mutation_targets should be cleared after mutation phase advance"
+    )
+
+
+# ---------------------------------------------------------------------------
+# B7 – to_summary_text ellipsis only appended when text exceeds limit
+# ---------------------------------------------------------------------------
+
+from dataclasses import dataclass, field
+from quantaalpha.pipeline.evolution.trajectory import StrategyTrajectory
+
+
+def _make_trajectory(**kwargs) -> StrategyTrajectory:
+    defaults = dict(
+        trajectory_id="t1",
+        direction_id=0,
+        round_idx=0,
+        phase=RoundPhase.ORIGINAL,
+    )
+    defaults.update(kwargs)
+    return StrategyTrajectory(**defaults)
+
+
+def test_b7_short_hypothesis_no_ellipsis():
+    """Short hypothesis (< 500 chars) must NOT get trailing ellipsis."""
+    t = _make_trajectory(hypothesis="Short hypothesis.")
+    summary = t.to_summary_text()
+    assert not summary.endswith("..."), (
+        f"Short hypothesis should not end with '...', got: {summary!r}"
+    )
+    assert "Short hypothesis." in summary
+
+
+def test_b7_long_hypothesis_gets_ellipsis():
+    """Hypothesis longer than 500 chars MUST get truncated with ellipsis."""
+    long_text = "x" * 501
+    t = _make_trajectory(hypothesis=long_text)
+    summary = t.to_summary_text()
+    assert "..." in summary, "Long hypothesis should be truncated with '...'"
+
+
+def test_b7_short_feedback_no_ellipsis():
+    """Short feedback (< 300 chars) must NOT get trailing ellipsis."""
+    t = _make_trajectory(hypothesis="h", feedback="Brief feedback.")
+    summary = t.to_summary_text()
+    # The feedback line should not end with '...'
+    feedback_line = [line for line in summary.splitlines() if "Brief feedback." in line]
+    assert feedback_line, "Expected feedback line in summary"
+    assert "..." not in feedback_line[0], (
+        f"Short feedback should not contain '...', got: {feedback_line[0]!r}"
+    )
+
+
+def test_b7_long_feedback_gets_ellipsis():
+    """Feedback longer than 300 chars MUST be truncated with ellipsis."""
+    long_feedback = "y" * 301
+    t = _make_trajectory(hypothesis="h", feedback=long_feedback)
+    summary = t.to_summary_text()
+    assert "..." in summary, "Long feedback should be truncated with '...'"
+
+
+# ---------------------------------------------------------------------------
+# B8 – FilterFailedRAGEvoAgent.filter_evolvable_subjects_by_feedback accepts list
+# ---------------------------------------------------------------------------
+
+from quantaalpha.coder.costeer.evolving_agent import FilterFailedRAGEvoAgent
+from quantaalpha.coder.costeer.evaluators import CoSTEERSingleFeedback
+from quantaalpha.coder.costeer.evolvable_subjects import EvolvingItem
+
+
+def _make_feedback(decision: bool) -> CoSTEERSingleFeedback:
+    fb = CoSTEERSingleFeedback.__new__(CoSTEERSingleFeedback)
+    fb.final_decision = decision
+    fb.execution_feedback = "ok" if decision else "fail"
+    fb.value_generated_flag = decision
+    fb.final_decision_based_on_gt = False
+    return fb
+
+
+def test_b8_filter_accepts_list_of_feedback():
+    """
+    Before fix: type annotation said CoSTEERSingleFeedback (singular).
+    After fix:  annotation is list[CoSTEERSingleFeedback].
+    The function already asserted isinstance(feedback, list) at runtime;
+    this test confirms the contract works end-to-end.
+    """
+    agent = FilterFailedRAGEvoAgent.__new__(FilterFailedRAGEvoAgent)
+
+    # Create an EvolvingItem with two sub-workspaces
+    ws_pass = SimpleNamespace(clear=lambda: None)
+    ws_fail = SimpleNamespace()
+    cleared = []
+    ws_fail.clear = lambda: cleared.append(True)
+
+    evo = EvolvingItem.__new__(EvolvingItem)
+    evo.sub_workspace_list = [ws_pass, ws_fail]
+
+    feedback = [_make_feedback(True), _make_feedback(False)]
+
+    result = agent.filter_evolvable_subjects_by_feedback(evo, feedback)
+    assert isinstance(result, EvolvingItem)
+    assert cleared, "Failed workspace should have been cleared"
+
+
+def test_b8_filter_rejects_non_list_feedback():
+    """Passing a single (non-list) feedback object must raise AssertionError."""
+    agent = FilterFailedRAGEvoAgent.__new__(FilterFailedRAGEvoAgent)
+    evo = EvolvingItem.__new__(EvolvingItem)
+    evo.sub_workspace_list = [SimpleNamespace(clear=lambda: None)]
+
+    single_fb = _make_feedback(True)
+    with pytest.raises(AssertionError):
+        agent.filter_evolvable_subjects_by_feedback(evo, single_fb)  # type: ignore[arg-type]

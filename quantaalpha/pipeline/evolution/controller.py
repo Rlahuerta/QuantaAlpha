@@ -324,8 +324,6 @@ class EvolutionController:
                     logger.info("Neither mutation nor crossover enabled, evolution complete")
         
         elif phase == RoundPhase.MUTATION:
-            # Update mutation index to skip completed
-            self._mutation_idx = len(self._mutation_targets)
             self._mutation_targets = []
             self._mutation_idx = 0
             self._current_round += 1

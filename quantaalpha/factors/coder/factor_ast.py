@@ -273,7 +273,7 @@ class SubtreeMatch:
     size: int
     
     def __str__(self):
-        return f"Match(size={self.size}):\n  Tree1: {str(root1)}\n  Tree2: {str(root2)}"
+        return f"Match(size={self.size}):\n  Tree1: {str(self.root1)}\n  Tree2: {str(self.root2)}"
 
 def find_largest_common_subtree(root1: Node, root2: Node) -> Opt[SubtreeMatch]:
     """Find largest common subtree between two trees."""
@@ -419,6 +419,8 @@ def count_number_nodes(node: Node) -> int:
         return (count_number_nodes(node.condition) + 
                 count_number_nodes(node.true_expr) + 
                 count_number_nodes(node.false_expr))
+    elif isinstance(node, UnaryOpNode):
+        return count_number_nodes(node.operand)
     return 0
 
 
@@ -463,6 +465,8 @@ def collect_unique_vars(node: Node, unique_vars: set) -> None:
         collect_unique_vars(node.condition, unique_vars)
         collect_unique_vars(node.true_expr, unique_vars)
         collect_unique_vars(node.false_expr, unique_vars)
+    elif isinstance(node, UnaryOpNode):
+        collect_unique_vars(node.operand, unique_vars)
 
 
 def count_all_nodes(expr: str) -> int:
@@ -535,6 +539,8 @@ def collect_base_features(node: Node, base_features: set) -> None:
         collect_base_features(node.condition, base_features)
         collect_base_features(node.true_expr, base_features)
         collect_base_features(node.false_expr, base_features)
+    elif isinstance(node, UnaryOpNode):
+        collect_base_features(node.operand, base_features)
 
 
 def count_nodes(node: Node) -> int:
@@ -557,6 +563,8 @@ def count_nodes(node: Node) -> int:
         return 1 + (count_nodes(node.condition) + 
                     count_nodes(node.true_expr) + 
                     count_nodes(node.false_expr))
+    elif isinstance(node, UnaryOpNode):
+        return 1 + count_nodes(node.operand)
     return 0
 
 

@@ -6,7 +6,7 @@ from quantaalpha.core.evolving_framework import EvolvableSubjects
 
 class FilterFailedRAGEvoAgent(RAGEvoAgent):
     def filter_evolvable_subjects_by_feedback(
-        self, evo: EvolvableSubjects, feedback: CoSTEERSingleFeedback
+        self, evo: EvolvableSubjects, feedback: list[CoSTEERSingleFeedback]
     ) -> EvolvableSubjects:
         assert isinstance(evo, EvolvingItem)
         assert isinstance(feedback, list)

@@ -93,10 +93,10 @@ def test_find_largest_common_subtree_and_compare_expressions():
     assert cond_match.size >= 5
 
 
-def test_subtree_match_str_has_known_name_error():
+def test_subtree_match_str_no_name_error():
     match = ast_module.SubtreeMatch(ast_module.VarNode("$a"), ast_module.VarNode("$a"), 1)
-    with pytest.raises(NameError):
-        str(match)
+    result = str(match)
+    assert "$a" in result
 
 
 def test_match_alphazoo_selection_and_error_handling(capsys, monkeypatch):
@@ -135,9 +135,9 @@ def test_count_helpers_cover_number_variable_and_feature_paths():
     base_features = set()
     ast_module.collect_unique_vars(tree, unique_vars)
     ast_module.collect_base_features(tree, base_features)
-    # Current collector implementation does not descend into UnaryOpNode.
-    assert unique_vars == {"$a", "$b"}
-    assert base_features == {"$a", "$b"}
+    # UnaryOpNode is now traversed, so $c (under -$c) is included.
+    assert unique_vars == {"$a", "$b", "$c"}
+    assert base_features == {"$a", "$b", "$c"}
 
     assert ast_module.count_number_nodes(tree) == 2
     assert ast_module.count_nodes(tree) >= 1

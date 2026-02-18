@@ -102,7 +102,7 @@ class StrategyTrajectory:
         
         # Hypothesis
         if self.hypothesis:
-            parts.append(f"Hypothesis: {self.hypothesis[:500]}...")
+            parts.append(f"Hypothesis: {self.hypothesis[:500]}{'...' if len(self.hypothesis) > 500 else ''}")
 
         # Factors
         if self.factors:
@@ -124,7 +124,7 @@ class StrategyTrajectory:
 
         # Feedback
         if self.feedback:
-            parts.append(f"Feedback: {self.feedback[:300]}...")
+            parts.append(f"Feedback: {self.feedback[:300]}{'...' if len(self.feedback) > 300 else ''}")
         
         return "\n\n".join(parts)
     
