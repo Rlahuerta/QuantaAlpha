@@ -531,7 +531,9 @@ class EvolutionController:
             crossover_n=self.config.crossover_n,
             prefer_diverse=self.config.prefer_diverse_crossover,
             selection_strategy=self.config.parent_selection_strategy,
-            top_percent_threshold=self.config.top_percent_threshold
+            top_percent_threshold=self.config.top_percent_threshold,
+            round_idx=self._current_round,
+            max_rounds=self.config.max_rounds,
         )
         self._crossover_idx = 0
         logger.info(f"Prepared {len(self._crossover_groups)} crossover groups from {len(candidates)} candidates")

@@ -648,9 +648,37 @@ class BacktestRunner:
             
             model.fit(dataset)
             print(f"[4/4] Train LightGBM done ({time.time()-train_start:.1f}s)")
-            
-            # Generate prediction
+
+            # Two-stage training: retrain on train+val with best num_boost_round.
+            # Adds ~20% more training data (the held-out validation year) before predicting test.
             pred = model.predict(dataset)
+            if model_config.get('extended_training', False):
+                try:
+                    from qlib.data.dataset import DatasetH
+                    best_rounds = getattr(model.model, 'best_iteration', None)
+                    if best_rounds and best_rounds > 0 and hasattr(dataset, 'handler') and hasattr(dataset, 'segments'):
+                        orig_segs = dataset.segments
+                        ext_segs = dict(orig_segs)
+                        # Extend train to cover validation period
+                        ext_segs['train'] = (orig_segs['train'][0], orig_segs['valid'][1])
+                        # Use test as dummy valid segment (data exists there, no early stopping)
+                        ext_segs['valid'] = orig_segs['test']
+                        dataset_ext = DatasetH(handler=dataset.handler, segments=ext_segs)
+                        params_ext = dict(model_config['params'])
+                        params_ext['num_boost_round'] = best_rounds
+                        params_ext.pop('early_stopping_round', None)
+                        model_ext = LGBModel(**params_ext)
+                        model_ext.fit(dataset_ext)
+                        pred_ext = model_ext.predict(dataset_ext)
+                        # Ensemble: 40% base (saw val period) + 60% extended (trained on more data)
+                        common_idx = pred.index.intersection(pred_ext.index)
+                        pred = pred.copy()
+                        pred.loc[common_idx] = 0.4 * pred.loc[common_idx] + 0.6 * pred_ext.loc[common_idx]
+                        print(f"  Extended training done (best_rounds={best_rounds}, ensemble 40/60)")
+                    else:
+                        logger.debug("Extended training skipped: no best_iteration or dataset attrs unavailable")
+                except Exception as ext_err:
+                    logger.warning(f"Extended training failed, using base model: {ext_err}")
             logger.debug(f"  Pred shape: {pred.shape}")
             
             # Save prediction

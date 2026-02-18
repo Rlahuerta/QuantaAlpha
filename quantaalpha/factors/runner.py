@@ -70,7 +70,7 @@ class QlibFactorRunner(CachedRunner[QlibFactorExperiment]):
         )
         IC_max.index = pd.MultiIndex.from_product([range(SOTA_feature.shape[1]), range(new_feature.shape[1])])
         IC_max = IC_max.unstack().max(axis=0)
-        return new_feature.iloc[:, IC_max[IC_max < 0.99].index]
+        return new_feature.iloc[:, IC_max[IC_max < 0.70].index]
 
     @cache_with_pickle(CachedRunner.get_cache_key, CachedRunner.assign_cached_result)
     def develop(self, exp: QlibFactorExperiment, use_local: bool = True) -> QlibFactorExperiment:
@@ -113,7 +113,7 @@ class QlibFactorRunner(CachedRunner[QlibFactorExperiment]):
                             # Execute factor
                             import subprocess
                             env = os.environ.copy()
-                            project_root = Path(__file__).parent.parent.parent.parent.parent
+                            project_root = Path(__file__).parent.parent.parent
                             env['PYTHONPATH'] = str(project_root) + os.pathsep + env.get('PYTHONPATH', '')
                             subprocess.check_output(
                                 [sys.executable, str(ws.workspace_path / 'factor.py')],
@@ -135,7 +135,23 @@ class QlibFactorRunner(CachedRunner[QlibFactorExperiment]):
                 raise FactorEmptyError("No valid factor data found to merge.")
 
             # Combine the SOTA factor and new factors if SOTA factor exists
-            if False: # SOTA_factor is not None and not SOTA_factor.empty:
+            if SOTA_factor is not None and not SOTA_factor.empty:
+                # Marginal IC: log max pairwise correlation of each new factor vs SOTA library.
+                # High max-IC (>0.70) factors are deduped; those that survive are genuinely novel.
+                try:
+                    common = SOTA_factor.index.intersection(new_factors.index)
+                    if len(common) > 10:
+                        sota_sub = SOTA_factor.loc[common]
+                        new_sub = new_factors.loc[common]
+                        corr_matrix = pd.concat([sota_sub, new_sub], axis=1).groupby(level=0).mean().corr()
+                        sota_cols = list(sota_sub.columns)
+                        new_cols = list(new_sub.columns)
+                        max_corrs = corr_matrix.loc[new_cols, sota_cols].abs().max(axis=1)
+                        for col, mc in max_corrs.items():
+                            logger.info(f"  Marginal IC check — {col}: max_corr_vs_library={mc:.3f} "
+                                        f"({'DEDUP' if mc >= 0.70 else 'NOVEL'})")
+                except Exception:
+                    pass
                 new_factors = self.deduplicate_new_factors(SOTA_factor, new_factors)
                 if new_factors.empty:
                     raise FactorEmptyError("No valid factor data found to merge.")

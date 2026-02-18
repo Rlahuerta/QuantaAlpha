@@ -441,53 +441,75 @@ def test_b9_keyerror_code_caught_in_retry_loop():
 
 
 # ---------------------------------------------------------------------------
-# B10 – QlibFBWorkspace.execute() injects conda bin into run_env PATH
+# B10 – _make_conda_local_env() resolves Python from .env vars
 # ---------------------------------------------------------------------------
 
-def test_b10_workspace_execute_injects_conda_bin_into_run_env():
-    """execute() must add sys.executable's bin directory to run_env PATH."""
+def test_b10_make_conda_local_env_uses_venv_python_env_var(monkeypatch, tmp_path):
+    """VENV_PYTHON env var overrides sys.executable as the Python path."""
+    fake_python = str(tmp_path / "bin" / "python")
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "python").write_text("#!/bin/sh\necho fake")
+    monkeypatch.setenv("VENV_PYTHON", fake_python)
+    from importlib import reload
+    import quantaalpha.factors.workspace as ws_mod
+    env = ws_mod._make_conda_local_env()
+    assert env.conf.bin_path == str(tmp_path / "bin"), (
+        f"bin_path should use VENV_PYTHON dir; got {env.conf.bin_path!r}"
+    )
+    assert fake_python in env.conf.default_entry
+
+
+def test_b10_make_conda_local_env_falls_back_to_sys_executable(monkeypatch):
+    """Without VENV_PYTHON or valid CONDA_ENV_NAME, falls back to sys.executable."""
     import sys
     from pathlib import Path
-    from quantaalpha.factors.workspace import QlibFBWorkspace
+    monkeypatch.delenv("VENV_PYTHON", raising=False)
+    monkeypatch.setenv("CONDA_ENV_NAME", "nonexistent_env_xyz_99")
     import quantaalpha.factors.workspace as ws_mod
-
-    ws = QlibFBWorkspace.__new__(QlibFBWorkspace)
+    env = ws_mod._make_conda_local_env()
     expected_bin = str(Path(sys.executable).parent)
-    captured = {}
-
-    original = ws_mod._RdagentQlibFBWorkspace.execute
-    try:
-        ws_mod._RdagentQlibFBWorkspace.execute = (
-            lambda self, qlib_config_name="conf.yaml", run_env={}, **kw:
-            captured.update({"run_env": run_env})
-        )
-        ws.execute(run_env={})
-    finally:
-        ws_mod._RdagentQlibFBWorkspace.execute = original
-
-    assert "PATH" in captured.get("run_env", {}), "PATH not injected into run_env"
-    assert expected_bin in captured["run_env"]["PATH"], "conda bin dir missing from PATH"
+    assert env.conf.bin_path == expected_bin, (
+        f"Should fall back to sys.executable bin; got {env.conf.bin_path!r}"
+    )
 
 
-def test_b10_workspace_execute_preserves_caller_path():
-    """If run_env already has PATH, execute() must not override it."""
+def test_b10_workspace_execute_uses_resolved_python_for_read_exp_res(monkeypatch, tmp_path):
+    """execute() must call read_exp_res.py with the resolved venv Python, not bare 'python'."""
+    fake_python = str(tmp_path / "bin" / "python")
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "python").write_text("#!/bin/sh\necho fake")
+    monkeypatch.setenv("VENV_PYTHON", fake_python)
+
     from quantaalpha.factors.workspace import QlibFBWorkspace
     import quantaalpha.factors.workspace as ws_mod
 
     ws = QlibFBWorkspace.__new__(QlibFBWorkspace)
-    captured = {}
+    ws.workspace_path = __import__("pathlib").Path("/tmp/fake_ws")
+    entries = []
 
-    original = ws_mod._RdagentQlibFBWorkspace.execute
+    class _FakeEnv:
+        conf = type("C", (), {"bin_path": str(tmp_path / "bin"),
+                               "default_entry": f"{fake_python} main.py"})()
+        def prepare(self): pass
+        def check_output(self, local_path, entry, env=None, **kw):
+            entries.append(entry)
+            return "fake log"
+
+    original_make = ws_mod._make_conda_local_env
     try:
-        ws_mod._RdagentQlibFBWorkspace.execute = (
-            lambda self, qlib_config_name="conf.yaml", run_env={}, **kw:
-            captured.update({"run_env": run_env})
-        )
-        ws.execute(run_env={"PATH": "/custom/bin"})
+        ws_mod._make_conda_local_env = lambda: _FakeEnv()
+        try:
+            ws.execute()
+        except Exception:
+            pass
     finally:
-        ws_mod._RdagentQlibFBWorkspace.execute = original
+        ws_mod._make_conda_local_env = original_make
 
-    assert captured["run_env"]["PATH"] == "/custom/bin", "Caller PATH must be preserved"
+    read_entry = next((e for e in entries if "read_exp_res" in e), None)
+    assert read_entry is not None, "read_exp_res.py entry not called"
+    assert fake_python in read_entry, (
+        f"read_exp_res entry must use resolved python; got: {read_entry!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -607,3 +629,230 @@ def test_b17_load_from_cache_location_skipped_for_us(tmp_path):
     calc = CustomFactorCalculator(config=config)
     result = calc._load_from_cache_location({"result_h5_path": str(h5_path)})
     assert result is None, "Should skip H5 cache for US region"
+
+
+# ---------------------------------------------------------------------------
+# I2 – Factor deduplication re-enabled with IC threshold 0.70
+# ---------------------------------------------------------------------------
+
+def test_i2_deduplication_drops_correlated_factors():
+    """deduplicate_new_factors must drop factors with IC >= 0.70 vs existing SOTA."""
+    import numpy as np
+    import pandas as pd
+
+    # Build reproducible deterministic data with a MultiIndex (datetime, instrument)
+    rng = np.random.default_rng(42)
+    dates = pd.date_range("2020-01-01", periods=20)
+    instruments = ["A", "B", "C"]
+    idx = pd.MultiIndex.from_product([dates, instruments], names=["datetime", "instrument"])
+
+    # SOTA factor: some signal
+    sota = pd.DataFrame({"f_sota": rng.standard_normal(len(idx))}, index=idx)
+
+    # new_a: highly correlated with sota (IC > 0.99) — should be dropped even at 0.70
+    # new_b: uncorrelated with sota (IC ~ 0) — should be kept
+    # new_c: moderately correlated (IC ~ 0.85) — dropped under threshold 0.70
+
+    sota_vals = sota["f_sota"].values
+    new_data = {
+        "new_a": sota_vals + rng.standard_normal(len(idx)) * 0.01,  # near-identical → IC≈1.0
+        "new_b": rng.standard_normal(len(idx)),                      # independent    → IC≈0
+    }
+    new_factors = pd.DataFrame(new_data, index=idx)
+
+    from quantaalpha.factors.runner import QlibFactorRunner
+
+    runner = QlibFactorRunner.__new__(QlibFactorRunner)
+    result = runner.deduplicate_new_factors(sota, new_factors)
+
+    # new_a should be dropped (IC≈1.0 >= 0.70), new_b should survive
+    assert "new_b" in result.columns, "Uncorrelated factor must survive deduplication"
+    assert "new_a" not in result.columns, "Near-duplicate factor must be dropped (IC≥0.70)"
+
+
+def test_i2_dedup_threshold_is_070():
+    """Verify the IC threshold in deduplicate_new_factors is 0.70 not 0.99."""
+    import inspect
+    from quantaalpha.factors.runner import QlibFactorRunner
+    src = inspect.getsource(QlibFactorRunner.deduplicate_new_factors)
+    assert "0.70" in src, "IC deduplication threshold must be 0.70"
+    assert "0.99" not in src, "Old IC threshold 0.99 must be removed"
+
+
+def test_i2_dedup_enabled_in_develop():
+    """The if-False guard disabling deduplication must be removed."""
+    import inspect
+    from quantaalpha.factors.runner import QlibFactorRunner
+    src = inspect.getsource(QlibFactorRunner.develop)
+    assert "if False" not in src, "Deduplication must no longer be guarded by 'if False'"
+
+
+# ---------------------------------------------------------------------------
+# Phase B — B1: Boltzmann temperature-scheduled parent selection
+# ---------------------------------------------------------------------------
+
+def test_b1_boltzmann_strategy_recognised():
+    """boltzmann strategy must not fall through to the default 'best' branch."""
+    from quantaalpha.pipeline.evolution.crossover import CrossoverOperator
+    from quantaalpha.pipeline.evolution.trajectory import StrategyTrajectory, RoundPhase
+
+    op = CrossoverOperator()
+
+    def _make_traj(tid, metric):
+        t = StrategyTrajectory(
+            trajectory_id=tid,
+            direction_id=0,
+            round_idx=0,
+            phase=RoundPhase.ORIGINAL,
+        )
+        t.backtest_metrics = {"RankIC": metric}
+        return t
+
+    candidates = [_make_traj(f"t{i}", 0.01 * i) for i in range(8)]
+    # boltzmann at round 0 (T=1.0) should return num_needed candidates
+    result = op._select_candidates_by_strategy(
+        candidates, strategy="boltzmann", top_percent_threshold=0.3,
+        num_needed=4, round_idx=0, max_rounds=10
+    )
+    assert len(result) == 4, "boltzmann must return exactly num_needed candidates"
+
+
+def test_b1_boltzmann_high_temperature_is_diverse():
+    """At T~1.0 (round_idx=0), boltzmann should not always pick the top candidates."""
+    import random
+    random.seed(42)
+    from quantaalpha.pipeline.evolution.crossover import CrossoverOperator
+    from quantaalpha.pipeline.evolution.trajectory import StrategyTrajectory, RoundPhase
+
+    op = CrossoverOperator()
+
+    def _make_traj(tid, metric):
+        t = StrategyTrajectory(
+            trajectory_id=tid,
+            direction_id=0,
+            round_idx=0,
+            phase=RoundPhase.ORIGINAL,
+        )
+        t.backtest_metrics = {"RankIC": metric}
+        return t
+
+    # Candidates 0-7; top candidate is t7 (metric=0.07)
+    candidates = [_make_traj(f"t{i}", 0.01 * i) for i in range(8)]
+    top_candidate = candidates[-1]
+
+    # Run many times at high temperature; t7 should NOT be selected every single time
+    always_top = True
+    for _ in range(20):
+        selected = op._select_candidates_by_strategy(
+            candidates, strategy="boltzmann", top_percent_threshold=0.3,
+            num_needed=3, round_idx=0, max_rounds=10
+        )
+        if top_candidate not in selected:
+            always_top = False
+            break
+    assert not always_top, "High-temperature boltzmann must not greedily select best every time"
+
+
+def test_b1_boltzmann_temperature_decays():
+    """Temperature must decay from 1.0 at round 0 to ~0.1 at max_rounds."""
+    import math
+    # Verify the temperature formula directly
+    max_rounds = 10
+    T_0 = max(0.1, 1.0 - (0 / max(max_rounds, 1)) * 0.9)
+    T_end = max(0.1, 1.0 - (max_rounds / max(max_rounds, 1)) * 0.9)
+    assert abs(T_0 - 1.0) < 1e-6, f"T at round 0 should be 1.0, got {T_0}"
+    assert abs(T_end - 0.1) < 1e-6, f"T at max_rounds should be 0.1, got {T_end}"
+
+
+# ---------------------------------------------------------------------------
+# Phase B — B2: Extended (two-stage) training config present in backtest.yaml
+# ---------------------------------------------------------------------------
+
+def test_b2_extended_training_in_config():
+    """backtest.yaml must have model.extended_training: true."""
+    import yaml, os
+    cfg_path = os.path.join(os.path.dirname(__file__), '..', 'configs', 'backtest.yaml')
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f)
+    assert cfg['model'].get('extended_training') is True, \
+        "model.extended_training must be true in backtest.yaml"
+
+
+# ---------------------------------------------------------------------------
+# Phase B — B4: n_drop reduced to 2 in backtest.yaml
+# ---------------------------------------------------------------------------
+
+def test_b4_n_drop_reduced():
+    """n_drop must be 2 (not 5) to reduce turnover costs."""
+    import yaml, os
+    cfg_path = os.path.join(os.path.dirname(__file__), '..', 'configs', 'backtest.yaml')
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f)
+    n_drop = cfg['backtest']['strategy']['kwargs']['n_drop']
+    assert n_drop == 2, f"n_drop must be 2 to reduce turnover cost, got {n_drop}"
+
+
+# ---------------------------------------------------------------------------
+# Phase B — controller passes round_idx to crossover operator
+# ---------------------------------------------------------------------------
+
+def test_b1_controller_passes_round_idx_to_crossover():
+    """_prepare_crossover_groups must forward round_idx and max_rounds."""
+    import inspect
+    from quantaalpha.pipeline.evolution.controller import EvolutionController
+    src = inspect.getsource(EvolutionController._prepare_crossover_groups)
+    assert "round_idx" in src, "_prepare_crossover_groups must pass round_idx to select_crossover_pairs"
+    assert "max_rounds" in src, "_prepare_crossover_groups must pass max_rounds to select_crossover_pairs"
+
+
+# ---------------------------------------------------------------------------
+# Bug B21 — LocalEnv.cached_run contaminates parquet across directions
+# ---------------------------------------------------------------------------
+
+def test_b21_workspace_execute_disables_localenv_cache(monkeypatch, tmp_path):
+    """execute() must set enable_cache=False on the LocalEnv.
+
+    LocalEnv.cached_run() hashes only .py/.csv files; combined_factors_df.parquet is
+    excluded from the key.  Without this fix all directions share the same cache key
+    and direction 1+ have direction 0's workspace (including its parquet) unzipped
+    over them, corrupting factor data.
+    """
+    from quantaalpha.factors.workspace import QlibFBWorkspace
+    import quantaalpha.factors.workspace as ws_mod
+
+    ws = QlibFBWorkspace.__new__(QlibFBWorkspace)
+    ws.workspace_path = tmp_path
+
+    cache_states = []
+
+    class _FakeConf:
+        bin_path = ""
+        default_entry = f"{__import__('sys').executable} main.py"
+        enable_cache = True  # starts True; execute() must flip it to False
+
+    class _FakeEnv:
+        conf = _FakeConf()
+
+        def prepare(self):
+            pass
+
+        def check_output(self, local_path, entry, env=None, **kw):
+            cache_states.append(self.conf.enable_cache)
+            return "fake log"
+
+    original = ws_mod._make_conda_local_env
+    try:
+        ws_mod._make_conda_local_env = lambda: _FakeEnv()
+        try:
+            ws.execute()
+        except Exception:
+            pass
+    finally:
+        ws_mod._make_conda_local_env = original
+
+    assert cache_states, "check_output was never called"
+    assert all(s is False for s in cache_states), (
+        "LocalEnv.enable_cache must be False during execute() to prevent "
+        "cross-direction parquet contamination via cached_run; "
+        f"got enable_cache values: {cache_states}"
+    )

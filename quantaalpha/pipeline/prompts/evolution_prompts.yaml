@@ -52,6 +52,9 @@ mutation:
     - The new strategy has minimal correlation with the parent
     - Explore market patterns not covered by the parent
     - Maintain feasibility and reasonableness
+    - **Parameter perturbation**: If generating a variant rather than a fully orthogonal direction,
+      systematically vary time-window parameters by ±50% (e.g., TS_MEAN(x,20) → TS_MEAN(x,10) or
+      TS_MEAN(x,30)) to explore nearby parameter regimes that may capture different market dynamics.
 
     Output in JSON format:
     ```json

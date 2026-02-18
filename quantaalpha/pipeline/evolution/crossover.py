@@ -307,7 +307,9 @@ Please propose your fusion hypothesis based on the above crossover guidance.
         crossover_n: int = 3,
         prefer_diverse: bool = True,
         selection_strategy: str = "best",
-        top_percent_threshold: float = 0.3
+        top_percent_threshold: float = 0.3,
+        round_idx: int = 0,
+        max_rounds: int = 10,
     ) -> list[list[StrategyTrajectory]]:
         """
         Select parent groups for crossover.
@@ -339,7 +341,9 @@ Please propose your fusion hypothesis based on the above crossover guidance.
             candidates, 
             selection_strategy, 
             top_percent_threshold,
-            crossover_n * crossover_size  # Need enough for all groups
+            crossover_n * crossover_size,  # Need enough for all groups
+            round_idx=round_idx,
+            max_rounds=max_rounds,
         )
         
         # Generate all possible combinations from selected candidates
@@ -377,7 +381,9 @@ Please propose your fusion hypothesis based on the above crossover guidance.
         candidates: list[StrategyTrajectory],
         strategy: str,
         top_percent_threshold: float,
-        num_needed: int
+        num_needed: int,
+        round_idx: int = 0,
+        max_rounds: int = 10,
     ) -> list[StrategyTrajectory]:
         """
         Pre-select candidates based on selection strategy.
@@ -387,11 +393,14 @@ Please propose your fusion hypothesis based on the above crossover guidance.
             strategy: Selection strategy
             top_percent_threshold: Threshold for top_percent_plus_random
             num_needed: Minimum number of candidates needed
+            round_idx: Current evolution round (used by boltzmann)
+            max_rounds: Total evolution rounds (used by boltzmann temperature decay)
             
         Returns:
             List of selected candidates
         """
         import random
+        import math
         
         if len(candidates) <= num_needed:
             return candidates
@@ -435,7 +444,34 @@ Please propose your fusion hypothesis based on the above crossover guidance.
                 )
                 return top_candidates + random_picks
             return top_candidates
-        
+
+        elif strategy == "boltzmann":
+            # Temperature-annealed Boltzmann sampling.
+            # Early rounds (T high) → near-uniform exploration; later rounds (T low) → greedy.
+            # T decays linearly from 1.0 to 0.1 over max_rounds.
+            temperature = max(0.1, 1.0 - (round_idx / max(max_rounds, 1)) * 0.9)
+            metrics = [t.get_primary_metric() or 0.0 for t in candidates]
+            # Shift so minimum is 0 before applying exp (avoids large negative exponents)
+            min_m = min(metrics)
+            weights = [math.exp((m - min_m) / temperature) for m in metrics]
+            total = sum(weights)
+            probs = [w / total for w in weights]
+            # Weighted sampling without replacement
+            selected_idx = set()
+            result = []
+            for _ in range(min(num_needed, len(candidates))):
+                # Renormalize after each pick
+                remaining = [(i, p) for i, p in enumerate(probs) if i not in selected_idx]
+                if not remaining:
+                    break
+                idxs, ps = zip(*remaining)
+                ps_sum = sum(ps)
+                ps_norm = [p / ps_sum for p in ps]
+                chosen = random.choices(idxs, weights=ps_norm, k=1)[0]
+                selected_idx.add(chosen)
+                result.append(candidates[chosen])
+            return result
+
         else:
             # Default to best
             logger.warning(f"Unknown selection strategy: {strategy}, using 'best'")

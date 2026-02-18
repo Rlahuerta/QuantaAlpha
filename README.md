@@ -157,6 +157,25 @@ FACTOR_CoSTEER_DATA_FOLDER=/abs/path/to/git_ignore_folder/factor_implementation_
 FACTOR_CoSTEER_DATA_FOLDER_DEBUG=/abs/path/to/git_ignore_folder/factor_implementation_source_data_debug
 ```
 
+#### Python Runtime (important for conda users)
+
+By default the factor execution subprocess resolves the Python interpreter using the following chain:
+
+1. `VENV_PYTHON` env var — **explicit absolute path** (recommended for conda environments)
+2. `CONDA_ENV_NAME` env var — walks common conda base directories to locate the right interpreter
+3. `sys.executable` — the Python that launched the current process (safe fallback)
+
+Set `VENV_PYTHON` in your `.env` to avoid any PATH ambiguity:
+
+```bash
+# Recommended: explicit path to the conda env Python
+VENV_PYTHON=/home/<user>/anaconda3/envs/quantaalpha-ollama/bin/python
+# or
+VENV_PYTHON=/home/<user>/miniconda3/envs/quantaalpha-ollama/bin/python
+```
+
+> **Why is this needed?** Factor calculations run in a subprocess. Without an explicit Python path the subprocess can pick up the system Python (which lacks project dependencies), causing `RankIC=None` silently.
+
 #### Preflight Checklist (before mining)
 
 ```bash

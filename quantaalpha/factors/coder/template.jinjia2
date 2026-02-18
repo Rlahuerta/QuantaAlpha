@@ -10,7 +10,13 @@ from quantaalpha.factors.coder.function_lib import *
 def calculate_factor(expr: str, name: str):
     # stock dataframe
     df = pd.read_hdf('./daily_pv.h5', key='data')
-    
+
+    # Compute derived features not stored in the HDF5 snapshot
+    if '$return' not in df.columns and '$close' in df.columns:
+        df['$return'] = df.groupby(level='instrument')['$close'].pct_change(periods=1, fill_method=None)
+    if '$vwap' not in df.columns and all(c in df.columns for c in ['$open', '$high', '$low', '$close']):
+        df['$vwap'] = (df['$open'] + df['$high'] + df['$low'] + df['$close']) / 4.0
+
     expr = parse_symbol(expr, df.columns)
     expr = parse_expression(expr)
 

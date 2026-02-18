@@ -52,7 +52,9 @@ data:
 ######################################################################
 
 dataset:
-  label: "Ref($close, -2) / Ref($close, -1) - 1"
+  # Multi-period label: 50% 1-day + 30% 5-day + 20% 20-day forward return.
+  # Blending horizons reduces label noise while preserving short-term alpha.
+  label: "(Ref($close, -2) / Ref($close, -1) - 1) * 0.5 + (Ref($close, -6) / Ref($close, -1) - 1) * 0.3 + (Ref($close, -21) / Ref($close, -1) - 1) * 0.2"
 
   learn_processors:
     - class: "Fillna"
@@ -90,6 +92,9 @@ dataset:
 
 model:
   type: "lgb"
+  # Two-stage training: after early-stopping finds best_rounds on val set,
+  # retrain on train+val combined using best_rounds; ensemble 40/60 with base model.
+  extended_training: true
   params:
     loss: "mse"
     learning_rate: 0.1
@@ -118,7 +123,7 @@ backtest:
     kwargs:
       signal: "<PRED>"
       topk: 50
-      n_drop: 5
+      n_drop: 2
 
   backtest:
     start_time: "2022-01-01"
