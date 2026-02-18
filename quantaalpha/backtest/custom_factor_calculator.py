@@ -35,6 +35,12 @@ os.environ.setdefault('JOBLIB_START_METHOD', 'loky')
 
 logger = logging.getLogger(__name__)
 
+# Precision used for all factor Series and DataFrames.
+# float16 (half-precision) is sufficient for cross-sectionally normalised factors
+# (RANK/ZSCORE output is typically in [-3, 3], well within float16's ±65504 range)
+# and halves memory vs float32.  Change here to widen precision if needed.
+FACTOR_DTYPE = np.float16
+
 DEFAULT_CACHE_DIR = Path(os.environ.get("FACTOR_CACHE_DIR", "data/results/factor_cache"))
 
 
@@ -162,7 +168,7 @@ class CustomFactorCalculator:
                     result = result.swaplevel()
                     result = result.sort_index()
             
-            return result
+            return result.astype(FACTOR_DTYPE)
         except Exception as e:
             logger.debug(f"Process cached result failed [{source}]: {e}")
             return None
@@ -265,9 +271,9 @@ class CustomFactorCalculator:
                         result = result[~result.index.duplicated(keep='last')]
                         clean_idx = df.index[~df.index.duplicated(keep='last')]
                         result = result.reindex(clean_idx)
-                return result.astype(np.float64)
+                return result.astype(FACTOR_DTYPE)
             else:
-                return pd.Series(result, index=df.index, name=factor_name).astype(np.float64)
+                return pd.Series(result, index=df.index, name=factor_name).astype(FACTOR_DTYPE)
                 
         except Exception as e:
             logger.warning(f"Factor computation failed [{factor_name}]: {str(e)[:200]}")
@@ -476,7 +482,7 @@ class CustomFactorCalculator:
                 aligned_results[name] = validated
         
         if aligned_results:
-            result_df = pd.DataFrame(aligned_results)
+            result_df = pd.DataFrame(aligned_results).astype(FACTOR_DTYPE)
             logger.debug(f"  Result DataFrame: {result_df.shape}")
             return result_df
         

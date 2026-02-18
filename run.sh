@@ -118,8 +118,12 @@ echo "Data: ${QLIB_DATA}"
 echo "Results: ${RESULTS_BASE}"
 echo "----------------------------------------"
 
-if [ -n "${STEP_N}" ]; then
+if [ -n "${STEP_N}" ] && [ -n "${LIBRARY_SUFFIX}" ]; then
+    quantaalpha mine --direction "${DIRECTION}" --step_n "${STEP_N}" --config_path "${CONFIG_PATH}" --factor_lib_suffix "${LIBRARY_SUFFIX}"
+elif [ -n "${STEP_N}" ]; then
     quantaalpha mine --direction "${DIRECTION}" --step_n "${STEP_N}" --config_path "${CONFIG_PATH}"
+elif [ -n "${LIBRARY_SUFFIX}" ]; then
+    quantaalpha mine --direction "${DIRECTION}" --config_path "${CONFIG_PATH}" --factor_lib_suffix "${LIBRARY_SUFFIX}"
 else
     quantaalpha mine --direction "${DIRECTION}" --config_path "${CONFIG_PATH}"
 fi

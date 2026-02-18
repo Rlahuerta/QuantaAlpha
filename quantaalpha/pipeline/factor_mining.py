@@ -485,7 +485,7 @@ def run_evolution_loop(
 
 
 @force_timeout()
-def main(path=None, step_n=100, direction=None, stop_event=None, config_path=None, evolution_mode=None):
+def main(path=None, step_n=100, direction=None, stop_event=None, config_path=None, evolution_mode=None, factor_lib_suffix=None):
     """
     Autonomous alpha factor mining with optional evolution support.
 
@@ -496,6 +496,9 @@ def main(path=None, step_n=100, direction=None, stop_event=None, config_path=Non
         stop_event: Stop event
         config_path: Run config file path
         evolution_mode: Enable evolution (None=from config, True/False=override)
+        factor_lib_suffix: Suffix for the factor library filename
+            (e.g. "exp_v1" → all_factors_library_exp_v1.json).
+            Overrides the FACTOR_LIBRARY_SUFFIX environment variable.
 
     Evolution flow: Original -> Mutation -> Crossover -> Mutation -> ...
 
@@ -506,6 +509,8 @@ def main(path=None, step_n=100, direction=None, stop_event=None, config_path=Non
         quantaalpha mine --direction "[Initial Direction]" --config_path configs/experiment.yaml
 
     """
+    if factor_lib_suffix:
+        os.environ["FACTOR_LIBRARY_SUFFIX"] = factor_lib_suffix
     try:
         from quantaalpha.core.conf import RD_AGENT_SETTINGS
         logger.info("="*60)

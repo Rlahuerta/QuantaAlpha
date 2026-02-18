@@ -42,8 +42,10 @@ def _stream_chunk(content: str, finish_reason: str | None = None):
 @pytest.fixture(autouse=True)
 def _reset_singletons():
     SingletonBaseClass._instance_dict.clear()
+    llm_client_module.APIBackend._encoder_cache.clear()
     yield
     SingletonBaseClass._instance_dict.clear()
+    llm_client_module.APIBackend._encoder_cache.clear()
 
 
 @pytest.fixture
@@ -585,7 +587,9 @@ def test_get_encoder_fallback_and_error_paths(monkeypatch, _patch_llm_settings, 
     monkeypatch.setattr(llm_client_module.tiktoken, "encoding_for_model", _encoding_for_model)
     assert backend._get_encoder() == "enc"
 
-    # When all tiktoken lookups fail, _get_encoder falls back to cl100k_base
+    # When all tiktoken lookups fail, _get_encoder falls back to cl100k_base.
+    # Clear the class-level cache so the patched tiktoken is actually called.
+    llm_client_module.APIBackend._encoder_cache.clear()
     monkeypatch.setattr(
         llm_client_module.tiktoken,
         "encoding_for_model",

@@ -80,7 +80,34 @@ Examples:
         from quantaalpha.backtest.runner import BacktestRunner
         
         runner = BacktestRunner(str(config_path))
-        
+
+        # Enforce optional RSS memory cap via a background watchdog thread.
+        # RLIMIT_AS is avoided because Python's virtual address space far exceeds
+        # physical RSS, causing spurious allocation failures.
+        max_mem_gb = runner.config.get('max_memory_gb')
+        if max_mem_gb:
+            import threading, os as _os, time as _time
+            limit_bytes = int(max_mem_gb * (1024 ** 3))
+
+            def _rss_watchdog():
+                pid = _os.getpid()
+                while True:
+                    _time.sleep(5)
+                    try:
+                        with open(f"/proc/{pid}/statm") as _f:
+                            # statm field 1 (resident pages) × page size = RSS bytes
+                            rss = int(_f.read().split()[1]) * _os.sysconf("SC_PAGE_SIZE")
+                        if rss > limit_bytes:
+                            print(f"\nRSS {rss//(1024**3):.1f} GB exceeded limit "
+                                  f"{max_mem_gb} GB — terminating.", flush=True)
+                            _os.kill(pid, 9)
+                    except Exception:
+                        break
+
+            _t = threading.Thread(target=_rss_watchdog, daemon=True)
+            _t.start()
+            print(f"Memory watchdog started: limit {max_mem_gb} GB RSS")
+
         if args.dry_run:
             print("\nDry Run - load factors only\n")
             from quantaalpha.backtest.factor_loader import FactorLoader

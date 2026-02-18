@@ -368,6 +368,10 @@ class APIBackend:
     So we should split them into different classes in `oai/backends/` in the future.
     """
 
+    # Class-level encoder cache so _get_encoder() runs only once per model name,
+    # even when APIBackend() is re-instantiated on every token-count call.
+    _encoder_cache: dict = {}
+
     # FIXME: (xiao) We should avoid using self.xxxx.
     # Instead, we can use LLM_SETTINGS directly. If it's difficult to support different backend settings, we can split them into multiple BaseSettings.
     def __init__(  # noqa: C901, PLR0912, PLR0915
@@ -549,28 +553,40 @@ class APIBackend:
         tiktoken.encoding_for_model(self.chat_model) does not cover all cases it should consider.
 
         This function attempts to handle several edge cases.
+        Results are cached at the class level (_encoder_cache) so the warning fires only once
+        per unique model name even when APIBackend() is re-instantiated on every token-count call.
         """
 
+        model = self.chat_model
+        if model in APIBackend._encoder_cache:
+            return APIBackend._encoder_cache[model]
+
         # 1) cases
-        def _azure_patch(model: str) -> str:
+        def _azure_patch(m: str) -> str:
             """
             When using Azure API, self.chat_model is the deployment name that can be any string.
             For example, it may be `gpt-4o_2024-08-06`. But tiktoken.encoding_for_model can't handle this.
             """
-            return model.replace("_", "-")
+            return m.replace("_", "-")
 
-        model = self.chat_model
+        encoder = None
         try:
-            return tiktoken.encoding_for_model(model)
+            encoder = tiktoken.encoding_for_model(model)
         except KeyError:
             try:
-                return tiktoken.encoding_for_model(_azure_patch(model))
+                encoder = tiktoken.encoding_for_model(_azure_patch(model))
             except KeyError:
                 pass
-        # Non-OpenAI models (Ollama, etc.) are not in tiktoken's registry;
-        # fall back to cl100k_base which gives a reasonable token count.
-        logger.warning(f"Model '{model}' not in tiktoken registry; using cl100k_base for token counting.")
-        return tiktoken.get_encoding("cl100k_base")
+
+        if encoder is None:
+            # Non-OpenAI models (Ollama, etc.) are not in tiktoken's registry;
+            # fall back to cl100k_base which gives a reasonable token count.
+            # Log at WARNING level only once per model name (class-level cache prevents repeats).
+            logger.warning(f"Model '{model}' not in tiktoken registry; using cl100k_base for token counting.")
+            encoder = tiktoken.get_encoding("cl100k_base")
+
+        APIBackend._encoder_cache[model] = encoder
+        return encoder
 
     def build_chat_session(
         self,
