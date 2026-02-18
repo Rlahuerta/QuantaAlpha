@@ -305,6 +305,16 @@ def run_evolution_loop(
     RD_AGENT_SETTINGS.use_file_lock = False
     logger.info("Evolution mode: file lock disabled to avoid deadlock")
 
+    # Fail fast: CONDA_DEFAULT_ENV must be set when use_local=True so that
+    # rdagent's LocalEnv can construct CondaConf.  Without this guard the loop
+    # catches the ValidationError and retries the same task infinitely.
+    _use_local_check = bool(exec_cfg.get("use_local", True))
+    if _use_local_check and not os.environ.get("CONDA_DEFAULT_ENV"):
+        raise EnvironmentError(
+            "CONDA_DEFAULT_ENV is not set. "
+            "Export it before launching: export CONDA_DEFAULT_ENV=quantaalpha-ollama"
+        )
+
     # Parse config
     num_directions = int(planning_cfg.get("num_directions", 2))
     max_rounds = int(evolution_cfg.get("max_rounds", 10))
@@ -466,6 +476,7 @@ def run_evolution_loop(
                 logger.error(f"Task failed: {e}")
                 import traceback
                 logger.error(traceback.format_exc())
+                controller.report_task_failed(task, e)
                 continue
 
     state_path = Path(log_root) / "evolution_state.json"

@@ -59,6 +59,8 @@ Examples:
     parser.add_argument('--dry-run', action='store_true', help='Load factors only, no backtest')
     parser.add_argument('--skip-uncached', action='store_true',
                         help='Skip uncached factors; use only cached factors for backtest')
+    parser.add_argument('--output-name', type=str, default=None,
+                        help='Custom output file prefix for results (default: experiment name)')
     
     args = parser.parse_args()
     
@@ -141,6 +143,7 @@ Examples:
                 factor_json=args.factor_json,
                 experiment_name=args.experiment,
                 skip_uncached=args.skip_uncached,
+                output_name=args.output_name,
             )
             
     except KeyboardInterrupt:

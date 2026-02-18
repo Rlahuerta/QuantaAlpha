@@ -1,13 +1,16 @@
 """
-AST-level expression parameter mutation.
+AST-level expression mutation for Phase C diversity.
 
-Takes a valid factor expression and perturbs integer window parameters by ×0.5
-or ×2, producing a structurally identical factor that operates over a different
-time horizon.  Used during mutation rounds to generate concrete expression hints
-for the LLM hypothesis generator without requiring a full LLM call.
+Provides three layers of expression mutation hints for LLM mutation prompts:
 
-Typical use-case: parent mined `TS_MEAN($return, 20)` → perturbation suggests
-`TS_MEAN($return, 10)` and `TS_MEAN($return, 40)` as sibling factors to explore.
+1. **Window scaling** — perturb integer window params by ×0.5 / ×2
+2. **Operator substitution** — swap semantically-similar temporal operators
+   (e.g. TS_MEAN → EMA/WMA/DECAYLINEAR, TS_STD → TS_ZSCORE)
+3. **Structural wrapping** — suggest RANK/ZSCORE cross-sectional wrappers
+   and DELTA(·,1) temporal differentiation if not already present
+
+None of these require an LLM call; they run in microseconds and are appended
+to the mutation-round prompt so the LLM is guided toward unexplored variants.
 """
 
 from __future__ import annotations
@@ -17,6 +20,10 @@ import random
 from typing import Sequence
 
 
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
 # Temporal operators whose first numeric argument is a window parameter.
 _TEMPORAL_OPS = {
     "TS_MEAN", "TS_STD", "TS_MAX", "TS_MIN", "TS_SUM", "TS_RANK",
@@ -25,8 +32,28 @@ _TEMPORAL_OPS = {
     "SMA",  # SMA(A, n, m) — n is window
 }
 
-# Pattern: FUNC_NAME(... , <integer> ...)  — matches the integer window argument
-# We look for integer literals that appear as a standalone argument (comma-separated).
+# Operator substitution map: operator → list of semantically similar alternatives.
+# Groups: weighted moving averages, dispersion, extremes, cross-sectional norms.
+_OP_SUBSTITUTIONS: dict[str, list[str]] = {
+    "TS_MEAN":     ["EMA", "WMA", "DECAYLINEAR"],
+    "EMA":         ["TS_MEAN", "WMA", "DECAYLINEAR"],
+    "WMA":         ["TS_MEAN", "EMA", "DECAYLINEAR"],
+    "DECAYLINEAR": ["TS_MEAN", "EMA", "WMA"],
+    "TS_STD":      ["TS_ZSCORE"],
+    "TS_ZSCORE":   ["TS_STD"],
+    "TS_MAX":      ["TS_MIN"],
+    "TS_MIN":      ["TS_MAX"],
+    "RANK":        ["ZSCORE"],
+    "ZSCORE":      ["RANK"],
+}
+
+# Cross-sectional wrappers to suggest when the expression lacks one.
+_CS_WRAPPERS = ("RANK", "ZSCORE")
+
+# Temporal wrappers that add a derivative / momentum dimension.
+_TEMPORAL_WRAPPERS = ("DELTA",)
+
+# Pattern: FUNC_NAME(... , <integer> ...)  — matches the integer window argument.
 _WINDOW_PATTERN = re.compile(
     r"(?<![.\d])(\b(?:" + "|".join(_TEMPORAL_OPS) + r")\b)"  # operator name
     r"(\s*\([^)]*?,\s*)"                                       # args before window
@@ -35,6 +62,20 @@ _WINDOW_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Pattern to detect if an expression is already wrapped by a cross-sectional op.
+_CS_WRAP_PATTERN = re.compile(
+    r"^\s*(?:RANK|ZSCORE)\s*\(", re.IGNORECASE
+)
+
+# Pattern to detect if an expression is already differentiated.
+_DELTA_WRAP_PATTERN = re.compile(
+    r"^\s*DELTA\s*\(", re.IGNORECASE
+)
+
+
+# ---------------------------------------------------------------------------
+# Layer 1: Window scaling
+# ---------------------------------------------------------------------------
 
 def _scale_window(n: int, factor: float, min_val: int = 2, max_val: int = 240) -> int:
     """Scale window n by factor, clip to [min_val, max_val], round to nearest int."""
@@ -48,66 +89,104 @@ def perturb_expression_windows(
     rng: random.Random | None = None,
 ) -> list[str]:
     """
-    Return a list of perturbed variants of *expression*.
+    Return a list of window-scaled variants of *expression*.
 
-    For each integer window parameter found inside a temporal operator call,
-    one variant is produced per scale factor.  Scales are applied independently
-    per parameter so that all windows in an expression change together.
-
-    Args:
-        expression: Valid factor DSL expression string.
-        scales: Multipliers to apply to each window integer (default: ×0.5, ×2).
-        rng: Optional Random instance for reproducibility.
-
-    Returns:
-        List of (possibly duplicate-free) perturbed expression strings.
-        Returns empty list if no window parameters are found.
+    All integer window parameters inside temporal operator calls are scaled
+    simultaneously by each factor in *scales*.
 
     Example:
         >>> perturb_expression_windows("RANK(TS_MEAN($return, 20) / TS_STD($return, 10))")
-        [
-            "RANK(TS_MEAN($return, 10) / TS_STD($return, 5))",   # ×0.5
-            "RANK(TS_MEAN($return, 40) / TS_STD($return, 20))",  # ×2.0
-        ]
+        ["RANK(TS_MEAN($return, 10) / TS_STD($return, 5))",   # ×0.5
+         "RANK(TS_MEAN($return, 40) / TS_STD($return, 20))"]  # ×2.0
     """
     if rng is None:
         rng = random.Random(42)
 
-    # Find all window integers in temporal operator positions.
-    # We use a two-pass approach: locate positions, then substitute.
-    windows: list[tuple[int, int, int]] = []  # (match_start_of_int, end_of_int, value)
-
+    windows: list[tuple[int, int, int]] = []
     for m in _WINDOW_PATTERN.finditer(expression):
-        # group 3 is the integer window
-        start = m.start(3)
-        end = m.end(3)
-        val = int(m.group(3))
-        windows.append((start, end, val))
+        windows.append((m.start(3), m.end(3), int(m.group(3))))
 
     if not windows:
         return []
 
-    variants = []
-    for scale in scales:
-        # Rebuild expression with all windows scaled simultaneously.
-        # Work right-to-left to keep positions valid.
-        chars = list(expression)
-        for (start, end, val) in reversed(windows):
-            new_val = str(_scale_window(val, scale))
-            chars[start:end] = list(new_val)
-        perturbed = "".join(chars)
-        if perturbed != expression:
-            variants.append(perturbed)
-
-    # Deduplicate while preserving order
     seen: set[str] = set()
-    result = []
-    for v in variants:
-        if v not in seen:
-            seen.add(v)
-            result.append(v)
+    result: list[str] = []
+    for scale in scales:
+        chars = list(expression)
+        for start, end, val in reversed(windows):
+            chars[start:end] = list(str(_scale_window(val, scale)))
+        perturbed = "".join(chars)
+        if perturbed != expression and perturbed not in seen:
+            seen.add(perturbed)
+            result.append(perturbed)
     return result
 
+
+# ---------------------------------------------------------------------------
+# Layer 2: Operator substitution
+# ---------------------------------------------------------------------------
+
+def substitute_operators(expression: str, max_per_op: int = 1) -> list[str]:
+    """
+    Return variants where one temporal operator is replaced by a sibling.
+
+    For each operator found in *expression* that has known substitutes,
+    produces *max_per_op* replacement variants (the first alternatives listed
+    in ``_OP_SUBSTITUTIONS``).
+
+    Example:
+        >>> substitute_operators("RANK(TS_MEAN($return, 20) / TS_STD($return, 10))")
+        ["RANK(EMA($return, 20) / TS_STD($return, 10))",
+         "RANK(TS_MEAN($return, 20) / TS_ZSCORE($return, 10))"]
+    """
+    seen: set[str] = set()
+    result: list[str] = []
+
+    for op, substitutes in _OP_SUBSTITUTIONS.items():
+        # Case-insensitive whole-word match for the operator name
+        pattern = re.compile(r"(?<!\w)" + re.escape(op) + r"(?=\s*\()", re.IGNORECASE)
+        if not pattern.search(expression):
+            continue
+        for sub in substitutes[:max_per_op]:
+            variant = pattern.sub(sub, expression, count=1)
+            if variant != expression and variant not in seen:
+                seen.add(variant)
+                result.append(variant)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Layer 3: Structural wrapping
+# ---------------------------------------------------------------------------
+
+def wrap_expression(expression: str) -> list[str]:
+    """
+    Suggest structural wrappers not already present on *expression*.
+
+    - Cross-sectional: RANK(·) and ZSCORE(·) if expression lacks them.
+    - Temporal derivative: DELTA(·, 1) if expression lacks it.
+
+    Returns a list of (label, wrapped_expression) tuples for prompt formatting.
+    """
+    results: list[tuple[str, str]] = []
+    stripped = expression.strip()
+
+    # Cross-sectional normalization
+    if not _CS_WRAP_PATTERN.match(stripped):
+        for op in _CS_WRAPPERS:
+            results.append((f"{op} normalization", f"{op}({stripped})"))
+
+    # Temporal differentiation (1-period change of the factor)
+    if not _DELTA_WRAP_PATTERN.match(stripped):
+        results.append(("temporal derivative (momentum)", f"DELTA({stripped}, 1)"))
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Combined hint builder
+# ---------------------------------------------------------------------------
 
 def build_ast_mutation_hint(
     best_expression: str,
@@ -115,27 +194,45 @@ def build_ast_mutation_hint(
     scales: Sequence[float] = (0.5, 2.0),
 ) -> str:
     """
-    Build a prompt hint string describing window-perturbed variants of *best_expression*.
+    Build a multi-section prompt hint covering all three mutation axes.
 
-    Intended for inclusion in the mutation-round ``strategy_suffix`` so the LLM
-    knows which expression variants have not yet been explored.
+    Sections included (only if non-empty):
+      1. Window-parameter variants (×0.5, ×2)
+      2. Operator-substitution variants
+      3. Structural wrappers (RANK, ZSCORE, DELTA)
 
-    Returns an empty string if no window parameters exist in the expression.
+    Returns an empty string if no mutations are possible.
     """
-    variants = perturb_expression_windows(best_expression, scales=scales)
-    if not variants:
+    label = f" for `{factor_name}`" if factor_name else ""
+    sections: list[str] = [f"\n### AST Expression Variants{label}",
+                           f"Base: `{best_expression}`\n"]
+
+    # 1. Window scaling
+    window_variants = perturb_expression_windows(best_expression, scales=scales)
+    if window_variants:
+        sections.append("**Time-horizon variants** (window ×0.5 / ×2):")
+        for v in window_variants:
+            sections.append(f"  - `{v}`")
+
+    # 2. Operator substitution
+    op_variants = substitute_operators(best_expression)
+    if op_variants:
+        sections.append("\n**Operator-substitution variants** (similar semantics, different weighting):")
+        for v in op_variants:
+            sections.append(f"  - `{v}`")
+
+    # 3. Structural wrappers
+    wrap_variants = wrap_expression(best_expression)
+    if wrap_variants:
+        sections.append("\n**Structural wrappers** (unexplored normalization / differentiation):")
+        for desc, v in wrap_variants:
+            sections.append(f"  - `{v}`  ← {desc}")
+
+    # Return empty string if nothing was generated
+    if len(sections) <= 2:
         return ""
 
-    label = f" for `{factor_name}`" if factor_name else ""
-    lines = [
-        f"\n### AST Window-Parameter Variants{label}",
-        f"Base expression: `{best_expression}`",
-        "The following time-horizon variants have NOT yet been evaluated — "
-        "consider them as starting points:\n",
-    ]
-    for v in variants:
-        lines.append(f"  - `{v}`")
-    lines.append(
-        "\nIf you adopt one of these, adjust the factor name to reflect the new window size."
+    sections.append(
+        "\nPick the most promising variant or combine ideas; rename the factor to reflect the change."
     )
-    return "\n".join(lines)
+    return "\n".join(sections)

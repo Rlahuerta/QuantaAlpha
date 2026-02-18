@@ -706,6 +706,24 @@ class EvolutionController:
         
         elif phase == RoundPhase.CROSSOVER:
             logger.info(f"Crossover round complete (group {direction_id})")
+
+    def report_task_failed(self, task: dict[str, Any], error: Exception) -> None:
+        """
+        Report that a task has permanently failed (e.g. CondaConf/env error).
+
+        Advances controller state identically to report_task_complete but does NOT
+        add a trajectory to the pool.  This prevents the evolution loop from
+        retrying the same task endlessly after a non-recoverable error.
+        """
+        phase = task["phase"]
+        direction_id = task["direction_id"]
+        logger.warning(
+            f"Skipping failed task phase={phase.value} direction={direction_id}: {error}"
+        )
+        if phase == RoundPhase.ORIGINAL:
+            self._directions_completed.add(direction_id)
+        # Mutation/crossover tasks don't gate phase transitions on per-direction
+        # completion, so no extra state update is required for those phases.
     
     def create_trajectory_from_loop_result(
         self,

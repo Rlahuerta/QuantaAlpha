@@ -798,6 +798,7 @@ class BacktestRunner:
                         
                         excess_return_with_cost = portfolio_return - bench_return - cost
                         excess_return_with_cost = excess_return_with_cost.dropna()
+                        excess_return_gross = (portfolio_return - bench_return).dropna()
                         
                         if len(excess_return_with_cost) > 0:
                             try:
@@ -812,6 +813,10 @@ class BacktestRunner:
                                 save_df = daily_df[['excess_return']].copy()
                                 save_df.columns = ['daily_excess_return']
                                 save_df['cumulative_excess_return'] = save_df['daily_excess_return'].cumsum()
+                                if 'cost' in daily_df.columns:
+                                    cost_series = daily_df['cost'].replace([np.inf, -np.inf], np.nan).fillna(0)
+                                    save_df['daily_cost'] = cost_series.values
+                                    save_df['cumulative_cost'] = save_df['daily_cost'].cumsum()
                                 
                                 save_df.index.name = 'date'
                                 save_df.to_csv(csv_path)
@@ -827,6 +832,22 @@ class BacktestRunner:
                             ann_ret = float(analysis.get('annualized_return', 0))
                             info_ratio = float(analysis.get('information_ratio', 0))
                             max_dd = float(analysis.get('max_drawdown', 0))
+                            
+                            # Gross return (without transaction costs) and cost drag
+                            try:
+                                analysis_gross = risk_analysis(excess_return_gross)
+                                if isinstance(analysis_gross, pd.DataFrame):
+                                    analysis_gross = analysis_gross['risk'] if 'risk' in analysis_gross.columns else analysis_gross.iloc[:, 0]
+                                ann_ret_gross = float(analysis_gross.get('annualized_return', 0))
+                                if not np.isnan(ann_ret_gross) and not np.isinf(ann_ret_gross):
+                                    metrics['annualized_return_gross'] = ann_ret_gross
+                                if isinstance(cost, pd.Series) and len(cost) > 0:
+                                    annual_cost = float(cost.mean() * 252)
+                                    if not np.isnan(annual_cost):
+                                        metrics['annual_cost_rate'] = annual_cost
+                                        metrics['cost_drag'] = ann_ret_gross - ann_ret
+                            except Exception:
+                                pass
                             
                             if not np.isnan(ann_ret) and not np.isinf(ann_ret):
                                 metrics['annualized_return'] = ann_ret
@@ -863,7 +884,9 @@ class BacktestRunner:
         print(f"  IC: {_f(metrics.get('IC'))}  ICIR: {_f(metrics.get('ICIR'))}")
         print(f"  Rank IC: {_f(metrics.get('Rank IC'))}  Rank ICIR: {_f(metrics.get('Rank ICIR'))}")
         print("[Strategy Metrics]")
-        print(f"  Ann. Return: {_f(metrics.get('annualized_return'), '.4f')}  Max DD: {_f(metrics.get('max_drawdown'), '.4f')}")
+        print(f"  Ann. Return (net):  {_f(metrics.get('annualized_return'), '.4f')}  Max DD: {_f(metrics.get('max_drawdown'), '.4f')}")
+        if 'annualized_return_gross' in metrics:
+            print(f"  Ann. Return (gross):{_f(metrics.get('annualized_return_gross'), '.4f')}  Cost drag: {_f(metrics.get('cost_drag'), '.4f')}  Annual cost: {_f(metrics.get('annual_cost_rate'), '.4f')}")
         print(f"  Info Ratio: {_f(metrics.get('information_ratio'), '.4f')}  Calmar: {_f(metrics.get('calmar_ratio'), '.4f')}")
         print(f"Total time: {total_time:.1f}s")
         print(f"{'='*50}")
