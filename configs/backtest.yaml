@@ -143,9 +143,15 @@ backtest:
 
 # Hard cap on process RSS (physical) memory. A background watchdog thread
 # polls /proc/self/statm every 5 s and sends SIGKILL if the limit is exceeded.
-# Factor DataFrames are stored as float16, so 126 factors × 14M rows ≈ 3.5 GB;
-# set to null (or remove) to disable the watchdog.
+# Set to null (or remove) to disable the watchdog.
 max_memory_gb: 40
+
+# Numeric precision for factor DataFrames.
+# float16: ~3.5 GB for 126 factors × 14 M rows — acts as implicit regularisation
+#          (quantisation of RANK/ZSCORE values into ~1500 discrete levels).
+# float32: ~7.1 GB — full single precision, useful as a comparison baseline.
+# Override at runtime with: FACTOR_PRECISION=float32 python -m quantaalpha.backtest...
+factor_precision: float16
 
 llm:
   enabled: true

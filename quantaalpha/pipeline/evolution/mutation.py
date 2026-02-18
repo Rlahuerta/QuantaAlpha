@@ -16,6 +16,7 @@ import yaml
 from quantaalpha.log import logger
 from quantaalpha.llm.client import APIBackend
 from .trajectory import StrategyTrajectory, RoundPhase
+from .ast_mutation import build_ast_mutation_hint
 
 
 # Default prompt path
@@ -264,4 +265,14 @@ This is a mutation exploration round that requires generating an orthogonal new 
 
 Please propose your new hypothesis based on the above mutation guidance.
 """
+        # Append AST window-mutation hint if parent has a factor expression
+        if parent.factors:
+            best = parent.factors[-1]  # most recent factor from this trajectory
+            expr = best.get("expression", "")
+            name = best.get("name", "")
+            if expr:
+                ast_hint = build_ast_mutation_hint(expr, name)
+                if ast_hint:
+                    suffix += ast_hint
+
         return suffix

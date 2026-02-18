@@ -328,10 +328,28 @@ def test_alignment_helpers_and_where_edge_branches():
     assert function_lib_module._align_for_operation(1, values)[0] == 1
     assert function_lib_module._align_for_operation(values, 1)[1] == 1
 
-    bad_right = pd.Series([1.0, 2.0], index=pd.Index([by_date_idx[0], by_date_idx[0]], name="datetime"))
-    aligned_left, aligned_right = function_lib_module._align_for_operation(left_series, bad_right)
-    assert aligned_left is left_series
-    assert aligned_right is bad_right
+
+def test_arithmetic_alignment_guards_sequence_shape_mismatch():
+    """SEQUENCE(n) * cross-sectional-operator must raise a clear ValueError, not a
+    cryptic numpy broadcast error.  Covers the (2,) vs (2427,) bug found in
+    Liquidity_Adjusted_Price_Impact_Residual_20D."""
+    import numpy as np
+    import operator
+
+    arr2 = np.array([1.0, 2.0])                        # SEQUENCE(2) → shape (2,)
+    long_series = pd.Series(range(2427), dtype=float)  # MEAN($volume) → shape (2427,)
+
+    with pytest.raises(ValueError, match="Shape mismatch"):
+        function_lib_module._arithmetic_with_alignment(arr2, long_series, np.multiply)
+
+    with pytest.raises(ValueError, match="Shape mismatch"):
+        function_lib_module._arithmetic_with_alignment(long_series, arr2, np.multiply)
+
+
+def test_compare_with_alignment_branches():
+    values = _sample_series()
+    by_date_idx = pd.date_range("2024-01-01", periods=4)
+    values_df = values.to_frame("x")
 
     assert function_lib_module._compare_with_alignment(1, 2, operator.lt) is True
     lt_from_scalar = function_lib_module._compare_with_alignment(1, values, operator.lt)

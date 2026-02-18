@@ -36,10 +36,10 @@ os.environ.setdefault('JOBLIB_START_METHOD', 'loky')
 logger = logging.getLogger(__name__)
 
 # Precision used for all factor Series and DataFrames.
-# float16 (half-precision) is sufficient for cross-sectionally normalised factors
-# (RANK/ZSCORE output is typically in [-3, 3], well within float16's ±65504 range)
-# and halves memory vs float32.  Change here to widen precision if needed.
-FACTOR_DTYPE = np.float16
+# float16 (half-precision) is the default; override with FACTOR_PRECISION=float32 env var.
+# float16 is safe for cross-sectionally normalised factors (RANK/ZSCORE output in [-3, 3]).
+_FACTOR_PRECISION = os.environ.get("FACTOR_PRECISION", "float16").lower()
+FACTOR_DTYPE = np.float32 if _FACTOR_PRECISION == "float32" else np.float16
 
 DEFAULT_CACHE_DIR = Path(os.environ.get("FACTOR_CACHE_DIR", "data/results/factor_cache"))
 

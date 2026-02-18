@@ -108,6 +108,11 @@ Examples:
             _t.start()
             print(f"Memory watchdog started: limit {max_mem_gb} GB RSS")
 
+        # Apply factor_precision from config (env var takes precedence if already set).
+        import os as _os
+        _precision = runner.config.get('factor_precision', 'float16')
+        _os.environ.setdefault('FACTOR_PRECISION', str(_precision))
+
         if args.dry_run:
             print("\nDry Run - load factors only\n")
             from quantaalpha.backtest.factor_loader import FactorLoader

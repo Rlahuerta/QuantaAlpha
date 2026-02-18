@@ -646,7 +646,24 @@ def _arithmetic_with_alignment(df1, df2, op_func):
     """Arithmetic op with index alignment."""
     if not isinstance(df1, (pd.DataFrame, pd.Series)) and not isinstance(df2, (pd.DataFrame, pd.Series)):
         return op_func(df1, df2)
-    
+
+    # Guard: plain numpy array whose length doesn't match the pandas object raises a
+    # confusing broadcast error.  Detect this early and raise a clear message.
+    if isinstance(df1, np.ndarray) and not isinstance(df2, np.ndarray):
+        if df1.ndim == 1 and len(df1) != len(df2):
+            raise ValueError(
+                f"Shape mismatch: numpy array of length {len(df1)} cannot broadcast "
+                f"with pandas object of length {len(df2)}. "
+                f"Likely caused by SEQUENCE(n) used with a cross-sectional operator."
+            )
+    if isinstance(df2, np.ndarray) and not isinstance(df1, np.ndarray):
+        if df2.ndim == 1 and len(df2) != len(df1):
+            raise ValueError(
+                f"Shape mismatch: numpy array of length {len(df2)} cannot broadcast "
+                f"with pandas object of length {len(df1)}. "
+                f"Likely caused by SEQUENCE(n) used with a cross-sectional operator."
+            )
+
     if not isinstance(df1, (pd.DataFrame, pd.Series)):
         return op_func(df1, df2)
     if not isinstance(df2, (pd.DataFrame, pd.Series)):
