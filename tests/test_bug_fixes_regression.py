@@ -547,3 +547,63 @@ def test_b15_retry_note_included_on_syntax_error():
         note = f"Note: Previous expression was syntactically invalid: {e}. Fix the parentheses."
         assert "Note:" in note
         assert len(note) > 20
+
+
+# ---------------------------------------------------------------------------
+# B16 – get_qlib_stock_data uses config provider_uri over env
+# ---------------------------------------------------------------------------
+
+def test_b16_config_provider_uri_wins_over_env(monkeypatch):
+    """Config-file provider_uri must take priority over QLIB_DATA_DIR env."""
+    monkeypatch.setenv("QLIB_DATA_DIR", "/env/cn_data")
+
+    from quantaalpha.backtest.custom_factor_calculator import get_qlib_stock_data
+    import inspect, textwrap
+
+    # Verify that data_config['provider_uri'] is checked before env var
+    src = inspect.getsource(get_qlib_stock_data)
+    lines = [l.strip() for l in src.splitlines()]
+    # The config provider_uri line must appear before the env var line
+    config_line = next((i for i, l in enumerate(lines) if "data_config.get('provider_uri')" in l), None)
+    env_line = next((i for i, l in enumerate(lines) if "QLIB_DATA_DIR" in l), None)
+    assert config_line is not None, "config provider_uri not referenced"
+    assert env_line is not None, "QLIB_DATA_DIR not referenced"
+    assert config_line < env_line, "config provider_uri must be checked before env var"
+
+
+# ---------------------------------------------------------------------------
+# B17 – CustomFactorCalculator skips cache for non-CN markets
+# ---------------------------------------------------------------------------
+
+def test_b17_skip_market_cache_for_us_region():
+    """CustomFactorCalculator must skip H5 and MD5 caches when region=us."""
+    from quantaalpha.backtest.custom_factor_calculator import CustomFactorCalculator
+
+    config = {"data": {"region": "us", "provider_uri": "./data/qlib/us_data_2025"}}
+    calc = CustomFactorCalculator(config=config)
+    assert calc._skip_market_cache is True
+
+
+def test_b17_no_skip_cache_for_cn_region():
+    """CustomFactorCalculator must NOT skip caches when region=cn (default)."""
+    from quantaalpha.backtest.custom_factor_calculator import CustomFactorCalculator
+
+    config = {"data": {"region": "cn"}}
+    calc = CustomFactorCalculator(config=config)
+    assert calc._skip_market_cache is False
+
+
+def test_b17_load_from_cache_location_skipped_for_us(tmp_path):
+    """_load_from_cache_location returns None when _skip_market_cache is True."""
+    import pandas as pd
+    from quantaalpha.backtest.custom_factor_calculator import CustomFactorCalculator
+
+    # Create a fake H5 file
+    h5_path = tmp_path / "result.h5"
+    dummy = pd.Series([1.0, 2.0], name="factor")
+    dummy.to_hdf(str(h5_path), key="data")
+
+    config = {"data": {"region": "us"}}
+    calc = CustomFactorCalculator(config=config)
+    result = calc._load_from_cache_location({"result_h5_path": str(h5_path)})
+    assert result is None, "Should skip H5 cache for US region"

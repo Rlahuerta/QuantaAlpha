@@ -59,6 +59,9 @@ class CustomFactorCalculator:
         self.cache_dir = cache_dir or DEFAULT_CACHE_DIR
         self.auto_extract_cache = auto_extract_cache
         self._cache_extracted = False
+        # Skip market-specific caches when running cross-market (non-CN) backtest
+        data_cfg = (config or {}).get('data', {})
+        self._skip_market_cache = data_cfg.get('region', 'cn').lower() != 'cn'
         
         if data_df is not None and len(data_df) > 0:
             self._prepare_data()
@@ -102,7 +105,9 @@ class CustomFactorCalculator:
         return hashlib.md5(expr.encode()).hexdigest()
     
     def _load_from_cache(self, expr: str) -> Optional[pd.Series]:
-        """Load factor values from cache."""
+        """Load factor values from MD5 cache. Skipped for non-CN markets (stale data risk)."""
+        if self._skip_market_cache:
+            return None
         cache_key = self._get_cache_key(expr)
         cache_file = self.cache_dir / f"{cache_key}.pkl"
         
@@ -116,7 +121,9 @@ class CustomFactorCalculator:
         return None
     
     def _load_from_cache_location(self, cache_location: Dict) -> Optional[pd.Series]:
-        """Load factor from path given in cache_location."""
+        """Load factor from path given in cache_location. Skipped for non-CN markets."""
+        if self._skip_market_cache:
+            return None
         if not cache_location:
             return None
         
@@ -567,11 +574,12 @@ def get_qlib_stock_data(config: Dict) -> pd.DataFrame:
     
     data_config = config.get('data', {})
     
-    # Prefer QLIB_DATA_DIR env (aligned with runner.py)
+    # Config-file provider_uri wins; fall back to env vars then default
     provider_uri = (
-        os.environ.get('QLIB_DATA_DIR')
+        data_config.get('provider_uri')
+        or os.environ.get('QLIB_DATA_DIR')
         or os.environ.get('QLIB_PROVIDER_URI')
-        or data_config.get('provider_uri', os.path.expanduser('~/.qlib/qlib_data/cn_data'))
+        or os.path.expanduser('~/.qlib/qlib_data/cn_data')
     )
     provider_uri = os.path.expanduser(provider_uri)
     region = data_config.get('region', 'cn')

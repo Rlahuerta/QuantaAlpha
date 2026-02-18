@@ -225,19 +225,21 @@ def fake_qlib_modules(monkeypatch):
     return {"init_calls": init_calls, "backtest_module": qlib_backtest_module, "data_module": qlib_data_module}
 
 
-def test_init_qlib_prefers_env_and_is_idempotent(tmp_path, fake_qlib_modules, monkeypatch):
+def test_init_qlib_prefers_config_uri_and_is_idempotent(tmp_path, fake_qlib_modules, monkeypatch):
     config_path = _write_runner_config(tmp_path)
     runner = BacktestRunner(str(config_path))
 
+    # Env var set, but config-file provider_uri should win (enables cross-market backtests)
     monkeypatch.setenv("QLIB_DATA_DIR", "~/qlib_env_data")
     monkeypatch.setenv("QLIB_PROVIDER_URI", "/should/not/be/used")
 
     runner._init_qlib()
-    runner._init_qlib()
+    runner._init_qlib()  # second call is a no-op
 
     calls = fake_qlib_modules["init_calls"]
     assert len(calls) == 1
-    assert calls[0]["provider_uri"] == str((Path("~") / "qlib_env_data").expanduser())  # type: ignore[name-defined]
+    # Config-file provider_uri wins over env (B16 fix: cross-market backtest support)
+    assert calls[0]["provider_uri"] == str(tmp_path / "qlib_data")
     assert calls[0]["region"] == "us"
 
 

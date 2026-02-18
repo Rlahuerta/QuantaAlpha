@@ -86,10 +86,11 @@ class BacktestRunner:
             return
         import os
         import qlib
+        # Config-file provider_uri wins over env (supports cross-market backtests)
         provider_uri = (
-            os.environ.get('QLIB_DATA_DIR')
+            self.config['data'].get('provider_uri')
+            or os.environ.get('QLIB_DATA_DIR')
             or os.environ.get('QLIB_PROVIDER_URI')
-            or self.config['data']['provider_uri']
         )
         provider_uri = os.path.expanduser(provider_uri)
         region = self.config['data'].get('region', 'cn')
