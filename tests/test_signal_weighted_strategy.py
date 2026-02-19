@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from quantaalpha.backtest.strategy import SignalWeightedTopkStrategy
+from qlib.contrib.strategy.signal_strategy import WeightStrategyBase
 
 
 # ---------------------------------------------------------------------------
@@ -35,6 +36,7 @@ def _make_strategy(topk=5, n_drop=2, weight_scheme="linear_rank"):
     strat.topk = topk
     strat.n_drop = n_drop
     strat.weight_scheme = weight_scheme
+    strat.rebalance_frequency = 1
     return strat
 
 
@@ -162,9 +164,74 @@ def test_fewer_stocks_than_topk():
     assert abs(sum(weights.values()) - 1.0) < 1e-9
 
 
+
 # ---------------------------------------------------------------------------
-# Runner parquet fallback: weight_scheme plumbing
+# Rebalance frequency: generate_trade_decision skipping
 # ---------------------------------------------------------------------------
+
+class _FakeTradeCalendar:
+    def __init__(self, step):
+        self._step = step
+    def get_trade_step(self):
+        return self._step
+    def get_step_time(self, step=None, shift=0):
+        return None, None
+
+
+class _FakeSignal:
+    def get_signal(self, start_time=None, end_time=None):
+        return pd.Series({"A": 0.9, "B": 0.8, "C": 0.7})
+
+
+def _make_strategy_with_calendar(step, freq=5):
+    """Create strategy ready for generate_trade_decision tests."""
+    strat = SignalWeightedTopkStrategy.__new__(SignalWeightedTopkStrategy)
+    strat.topk = 3
+    strat.n_drop = 1
+    strat.weight_scheme = "equal"
+    strat.rebalance_frequency = freq
+    strat.signal = _FakeSignal()
+    return strat, _FakeTradeCalendar(step)
+
+
+def test_rebalance_frequency_skips_non_rebalance_days():
+    """On non-rebalance days, generate_trade_decision should return empty order list."""
+    from unittest.mock import patch, PropertyMock
+    from qlib.backtest.decision import TradeDecisionWO
+    for step in [1, 2, 3, 4, 6, 7, 8, 9]:
+        strat, cal = _make_strategy_with_calendar(step, freq=5)
+        with patch.object(type(strat), "trade_calendar", new_callable=PropertyMock, return_value=cal):
+            decision = strat.generate_trade_decision()
+        assert isinstance(decision, TradeDecisionWO)
+        assert list(decision.order_list) == [], f"Expected no orders on step {step}"
+
+
+def test_rebalance_frequency_calls_super_on_rebalance_days():
+    """On rebalance days (step % freq == 0), super().generate_trade_decision is called."""
+    from unittest.mock import patch, PropertyMock
+    strat, cal = _make_strategy_with_calendar(step=5, freq=5)
+    with patch.object(type(strat), "trade_calendar", new_callable=PropertyMock, return_value=cal):
+        with patch.object(WeightStrategyBase, "generate_trade_decision", return_value="mocked") as mock_gdt:
+            result = strat.generate_trade_decision()
+    mock_gdt.assert_called_once()
+    assert result == "mocked"
+
+
+def test_rebalance_frequency_default_is_daily():
+    """Default rebalance_frequency=1 means every day is a rebalance day."""
+    strat = _make_strategy(topk=3, weight_scheme="equal")
+    assert strat.rebalance_frequency == 1
+
+
+def test_rebalance_frequency_step_zero_is_rebalance():
+    """Step 0 (first day) is always a rebalance day."""
+    from unittest.mock import patch, PropertyMock
+    strat, cal = _make_strategy_with_calendar(step=0, freq=5)
+    with patch.object(type(strat), "trade_calendar", new_callable=PropertyMock, return_value=cal):
+        with patch.object(WeightStrategyBase, "generate_trade_decision", return_value="mocked") as mock_gdt:
+            result = strat.generate_trade_decision()
+    mock_gdt.assert_called_once()
+
 
 def test_runner_parquet_fallback_signal_weighted():
     """_compute_portfolio_metrics_from_parquet should accept weight_scheme in config."""

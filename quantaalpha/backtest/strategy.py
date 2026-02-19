@@ -20,10 +20,11 @@ For daily execution use TopkDropoutStrategy (equal weight) which achieves much
 lower costs (~0.19%/year) while still capturing the selection signal.
 """
 import copy
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
+from qlib.backtest.decision import TradeDecisionWO
 from qlib.contrib.strategy.signal_strategy import WeightStrategyBase
 
 
@@ -32,13 +33,16 @@ class SignalWeightedTopkStrategy(WeightStrategyBase):
 
     Args:
         topk (int): Number of stocks in portfolio.
-        n_drop (int): Max stocks replaced per trading day (turnover control).
+        n_drop (int): Max stocks replaced per *rebalance day* (turnover control).
         weight_scheme (str): One of:
             - 'linear_rank'  (default) – weight ∝ cross-sectional rank (1..k)
             - 'softmax'      – weight ∝ exp(score) after max-shift
             - 'score'        – weight ∝ score shifted to be non-negative
             - 'equal'        – equal weight (equivalent to TopkDropoutStrategy
                                but without its hold_thresh / method_sell logic)
+        rebalance_frequency (int): Rebalance every N trading days (default 1 = daily).
+            With daily rebalancing, shifting signal ranks cause ~18%/day turnover and
+            ~8-9%/yr cost drag. Set to 5 (weekly) to reduce to ~1-2%/yr cost.
     """
 
     def __init__(
@@ -47,12 +51,22 @@ class SignalWeightedTopkStrategy(WeightStrategyBase):
         topk: int,
         n_drop: int,
         weight_scheme: str = "linear_rank",
+        rebalance_frequency: int = 1,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.topk = topk
         self.n_drop = n_drop
         self.weight_scheme = weight_scheme
+        self.rebalance_frequency = max(1, int(rebalance_frequency))
+
+    def generate_trade_decision(self, execute_result=None):
+        """Skip non-rebalance days entirely; delegate on rebalance days."""
+        trade_step = self.trade_calendar.get_trade_step()
+        if trade_step % self.rebalance_frequency != 0:
+            # Non-rebalance day: hold current positions, generate no orders
+            return TradeDecisionWO([], self)
+        return super().generate_trade_decision(execute_result)
 
     def generate_target_weight_position(
         self, score, current, trade_start_time, trade_end_time
