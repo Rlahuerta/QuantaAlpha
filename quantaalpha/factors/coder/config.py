@@ -43,5 +43,15 @@ class FactorCoSTEERSettings(CoSTEERSettings):
     Base features are raw variables like $close, $open, $high, $low, $volume.
     Expressions using more than this number of distinct base features will be rejected."""
 
+    decay_filter_enabled: bool = False
+    """If True, reject factors whose IC at decay_horizon_days is <= decay_ic_min.
+    Disabled by default so existing mining runs are unaffected."""
+
+    decay_horizon_days: int = 5
+    """Horizon (in trading days) at which the factor IC must still be positive."""
+
+    decay_ic_min: float = 0.0
+    """Minimum IC required at decay_horizon_days (factors with IC <= this are rejected)."""
+
 
 FACTOR_COSTEER_SETTINGS = FactorCoSTEERSettings()

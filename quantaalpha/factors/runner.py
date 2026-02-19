@@ -72,6 +72,62 @@ class QlibFactorRunner(CachedRunner[QlibFactorExperiment]):
         IC_max = IC_max.unstack().max(axis=0)
         return new_feature.iloc[:, IC_max[IC_max < 0.70].index]
 
+    def _apply_decay_filter(self, factors_df: pd.DataFrame) -> pd.DataFrame:
+        """Filter out factor columns whose IC at decay_horizon_days is <= decay_ic_min.
+
+        Requires FACTOR_COSTEER_SETTINGS.decay_filter_enabled to be True (checked by caller).
+        Uses the daily_pv.h5 file in data_folder.
+        """
+        from quantaalpha.factors.decay_filter import compute_decay_profile
+
+        h5_path = Path(FACTOR_COSTEER_SETTINGS.data_folder) / "daily_pv.h5"
+        if not h5_path.exists():
+            logger.warning(
+                f"Decay filter enabled but H5 data not found at {h5_path}. Skipping decay gate."
+            )
+            return factors_df
+
+        horizon = FACTOR_COSTEER_SETTINGS.decay_horizon_days
+        ic_min = FACTOR_COSTEER_SETTINGS.decay_ic_min
+        keep_cols = []
+
+        for col in factors_df.columns:
+            factor_series = factors_df[col].dropna()
+            try:
+                metrics = compute_decay_profile(
+                    factor_series, h5_path, horizons=[1, horizon]
+                )
+                ic_at_horizon = metrics.get(f"ic_{horizon}d")
+                if ic_at_horizon is not None and ic_at_horizon > ic_min:
+                    logger.info(
+                        f"Decay gate PASS  — {col}: ic_{horizon}d={ic_at_horizon:.4f}"
+                    )
+                    keep_cols.append(col)
+                else:
+                    logger.info(
+                        f"Decay gate REJECT — {col}: ic_{horizon}d={ic_at_horizon} (≤ {ic_min})"
+                    )
+            except Exception as e:
+                logger.warning(f"Decay gate error for {col}: {e}. Keeping factor.")
+                keep_cols.append(col)
+
+        return factors_df[keep_cols]
+        # calculate the IC between each column of SOTA_feature and new_feature
+        # if the IC is larger than a threshold, remove the new_feature column
+        # return the new_feature
+
+        concat_feature = pd.concat([SOTA_feature, new_feature], axis=1)
+        IC_max = (
+            concat_feature.groupby("datetime")
+            .parallel_apply(
+                lambda x: self.calculate_information_coefficient(x, SOTA_feature.shape[1], new_feature.shape[1])
+            )
+            .mean()
+        )
+        IC_max.index = pd.MultiIndex.from_product([range(SOTA_feature.shape[1]), range(new_feature.shape[1])])
+        IC_max = IC_max.unstack().max(axis=0)
+        return new_feature.iloc[:, IC_max[IC_max < 0.70].index]
+
     @cache_with_pickle(CachedRunner.get_cache_key, CachedRunner.assign_cached_result)
     def develop(self, exp: QlibFactorExperiment, use_local: bool = True) -> QlibFactorExperiment:
         
@@ -133,6 +189,12 @@ class QlibFactorRunner(CachedRunner[QlibFactorExperiment]):
             
             if new_factors.empty:
                 raise FactorEmptyError("No valid factor data found to merge.")
+
+            # Decay IC gate: optionally reject factors without persistent signal
+            if FACTOR_COSTEER_SETTINGS.decay_filter_enabled:
+                new_factors = self._apply_decay_filter(new_factors)
+                if new_factors.empty:
+                    raise FactorEmptyError("All new factors rejected by decay IC gate.")
 
             # Combine the SOTA factor and new factors if SOTA factor exists
             if SOTA_factor is not None and not SOTA_factor.empty:

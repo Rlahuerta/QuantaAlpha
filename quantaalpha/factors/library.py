@@ -144,7 +144,28 @@ class FactorLibraryManager:
             if factor_expr and cache_location.get("result_h5_path"):
                 self._sync_h5_to_md5_cache(factor_expr, cache_location["result_h5_path"])
 
-        self._save()
+            # Passively enrich with decay metrics (never blocks; silently skipped if H5 missing)
+            result_h5 = cache_location.get("result_h5_path")
+            if result_h5 and not factor_entry["backtest_results"].get("ic_5d"):
+                try:
+                    from quantaalpha.factors.decay_filter import compute_decay_profile
+                    from quantaalpha.factors.coder.config import FACTOR_COSTEER_SETTINGS
+                    h5_data_path = Path(FACTOR_COSTEER_SETTINGS.data_folder) / "daily_pv.h5"
+                    if h5_data_path.exists() and Path(result_h5).exists():
+                        import h5py, pandas as _pd
+                        with h5py.File(result_h5, "r") as fh:
+                            factor_vals = _pd.read_hdf(result_h5, key="factor") if "factor" in fh else None
+                        if factor_vals is not None:
+                            if not isinstance(factor_vals.index, _pd.MultiIndex):
+                                factor_vals = factor_vals.stack()
+                                factor_vals.index.names = ["datetime", "instrument"]
+                            decay_metrics = compute_decay_profile(factor_vals, h5_data_path)
+                            for k, v in decay_metrics.items():
+                                factor_entry["backtest_results"][k] = v
+                except Exception as _e:
+                    logger.debug(f"Decay enrichment skipped for {factor_name}: {_e}")
+
+
         logger.info(
             f"Saved {len(sub_tasks)} factors to {self.library_path} (backtest_results: {len(backtest_results)} metrics)"
         )

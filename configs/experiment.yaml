@@ -119,6 +119,12 @@ quality_gate:
   # Max correction attempts when inconsistency is found
   max_correction_attempts: 3
 
+  # IC decay filter: reject factors whose IC is non-positive at N-day horizon.
+  # Defaults to false so existing mining runs are unaffected until explicitly enabled.
+  decay_filter_enabled: false
+  decay_horizon_days: 5     # horizon at which IC must still be positive
+  decay_ic_min: 0.0         # IC at decay_horizon_days must exceed this value
+
 
 # ============================================================
 # FACTOR GENERATION CONFIGURATION
