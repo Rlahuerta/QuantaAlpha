@@ -561,10 +561,26 @@ class BacktestRunner:
         if merged.empty:
             return {}
 
-        topk = int(strategy_config.get("kwargs", {}).get("topk", 50))
+        kwargs = strategy_config.get("kwargs", {})
+        topk = int(kwargs.get("topk", 50))
+        weight_scheme = kwargs.get("weight_scheme", "equal")
 
         def _daily_ret(g: pd.DataFrame) -> float:
-            return float(g.nlargest(topk, "score")["next_ret"].mean())
+            top = g.nlargest(topk, "score")
+            if weight_scheme == "linear_rank":
+                ranks = top["score"].rank(ascending=True, method="average")
+                w = ranks / ranks.sum()
+            elif weight_scheme == "softmax":
+                arr = top["score"].values.astype(float)
+                arr -= arr.max()
+                exp_w = np.exp(arr)
+                w = pd.Series(exp_w / exp_w.sum(), index=top.index)
+            elif weight_scheme == "score":
+                shifted = top["score"] - top["score"].min() + 1e-8
+                w = shifted / shifted.sum()
+            else:
+                w = pd.Series(np.ones(len(top)) / len(top), index=top.index)
+            return float((top["next_ret"] * w).sum())
 
         strat_ret = merged.groupby("datetime", sort=True).apply(_daily_ret)
 
@@ -773,8 +789,8 @@ class BacktestRunner:
                         "module_path": strategy_config['module_path'],
                         "kwargs": {
                             "signal": pred,
-                            "topk": strategy_config['kwargs']['topk'],
-                            "n_drop": strategy_config['kwargs']['n_drop']
+                            **{k: v for k, v in strategy_config['kwargs'].items()
+                               if k != 'signal'},
                         }
                     },
                     start_time=backtest_config['start_time'],

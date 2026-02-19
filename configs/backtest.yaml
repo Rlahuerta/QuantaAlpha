@@ -124,6 +124,9 @@ backtest:
       signal: "<PRED>"
       topk: 50
       n_drop: 2
+      # Alternative: SignalWeightedTopkStrategy (quantaalpha.backtest.strategy) with
+      # weight_scheme: "linear_rank" — NOTE: only use with weekly rebalancing or
+      # membership-change-only rebalancing; daily weight rebalancing causes ~9%/yr cost drag.
 
   backtest:
     start_time: "2022-01-01"

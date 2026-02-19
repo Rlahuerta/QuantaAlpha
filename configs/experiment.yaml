@@ -121,7 +121,7 @@ quality_gate:
 
   # IC decay filter: reject factors whose IC is non-positive at N-day horizon.
   # Defaults to false so existing mining runs are unaffected until explicitly enabled.
-  decay_filter_enabled: false
+  decay_filter_enabled: true
   decay_horizon_days: 5     # horizon at which IC must still be positive
   decay_ic_min: 0.0         # IC at decay_horizon_days must exceed this value
 
