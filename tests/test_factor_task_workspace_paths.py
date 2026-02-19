@@ -190,3 +190,52 @@ def test_factor_workspace_from_folder_path(monkeypatch, tmp_path):
 
     with pytest.raises(TypeError):
         FactorFBWorkspace.from_folder(task=task, path=folder)
+
+
+def test_us_market_templates_exist():
+    """US factor_template overrides must be present for run_us.sh to work."""
+    from quantaalpha.factors.workspace import _MARKET_REGION_TEMPLATE_DIRS
+
+    us_dir = _MARKET_REGION_TEMPLATE_DIRS["us"]
+    assert us_dir.exists(), f"US template dir missing: {us_dir}"
+    baseline = us_dir / "conf_baseline.yaml"
+    combined = us_dir / "conf_combined_factors.yaml"
+    assert baseline.exists(), "conf_baseline.yaml missing in us/ template dir"
+    assert combined.exists(), "conf_combined_factors.yaml missing in us/ template dir"
+
+    import yaml
+
+    b = yaml.safe_load(baseline.read_text())
+    c = yaml.safe_load(combined.read_text())
+    assert b["market"] == "sp500"
+    assert c["market"] == "sp500"
+    assert b["qlib_init"]["region"] == "us"
+    assert c["qlib_init"]["region"] == "us"
+    assert "us_data" in b["qlib_init"]["provider_uri"]
+
+
+def test_us_workspace_injects_us_templates(monkeypatch, tmp_path):
+    """When market_region='us', workspace injects US conf files (overriding CN defaults)."""
+    import quantaalpha.factors.workspace as ws_module
+    import quantaalpha.factors.coder.config as cfg_module
+
+    _set_common_settings(monkeypatch, tmp_path)
+    monkeypatch.setattr(cfg_module.FACTOR_COSTEER_SETTINGS, "market_region", "us")
+
+    injected = {}
+
+    class _CapturingWorkspace(ws_module.QlibFBWorkspace):
+        def inject_files(self, **kwargs):
+            injected.update(kwargs)
+
+    # Patch parent __init__ to avoid rdagent filesystem setup
+    import rdagent.scenarios.qlib.experiment.workspace as _rda_ws
+    monkeypatch.setattr(_rda_ws.QlibFBWorkspace, "__init__", lambda self, *a, **kw: None)
+
+    _CapturingWorkspace(template_folder_path=tmp_path)
+
+    assert "conf_baseline.yaml" in injected, "conf_baseline.yaml not injected"
+    assert "conf_combined_factors.yaml" in injected, "conf_combined_factors.yaml not injected"
+    assert "sp500" in injected["conf_baseline.yaml"]
+    assert "us_data" in injected["conf_baseline.yaml"]
+    assert "sp500" in injected["conf_combined_factors.yaml"]

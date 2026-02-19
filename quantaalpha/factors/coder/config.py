@@ -53,5 +53,10 @@ class FactorCoSTEERSettings(CoSTEERSettings):
     decay_ic_min: float = 0.0
     """Minimum IC required at decay_horizon_days (factors with IC <= this are rejected)."""
 
+    market_region: str = "cn"
+    """Target market region for mining backtest templates.
+    'cn' = CSI300 (default), 'us' = S&P500.
+    Controls which factor_template subdirectory is injected into each workspace."""
+
 
 FACTOR_COSTEER_SETTINGS = FactorCoSTEERSettings()

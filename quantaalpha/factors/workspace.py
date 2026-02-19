@@ -19,6 +19,11 @@ from rdagent.log import rdagent_logger as logger
 
 _CUSTOM_TEMPLATE_DIR = Path(__file__).resolve().parent / "factor_template"
 
+_MARKET_REGION_TEMPLATE_DIRS: dict[str, Path] = {
+    "cn": _CUSTOM_TEMPLATE_DIR,
+    "us": _CUSTOM_TEMPLATE_DIR / "us",
+}
+
 
 def _make_conda_local_env() -> LocalEnv:
     """Return a LocalEnv whose bin_path points to the active conda venv bin dir.
@@ -83,6 +88,15 @@ class QlibFBWorkspace(_RdagentQlibFBWorkspace):
         if _CUSTOM_TEMPLATE_DIR.exists():
             self.inject_code_from_folder(_CUSTOM_TEMPLATE_DIR)
             logger.info(f"Overrode rdagent default config with project template: {_CUSTOM_TEMPLATE_DIR}")
+        # If a non-default market region is configured, inject market-specific overrides
+        # after the base templates so they win over the CN defaults.
+        from quantaalpha.factors.coder.config import FACTOR_COSTEER_SETTINGS
+        region = FACTOR_COSTEER_SETTINGS.market_region.lower()
+        if region != "cn":
+            region_dir = _MARKET_REGION_TEMPLATE_DIRS.get(region)
+            if region_dir and region_dir.exists():
+                self.inject_code_from_folder(region_dir)
+                logger.info(f"Injected {region} market templates from {region_dir}")
 
     def execute(self, qlib_config_name: str = "conf.yaml", run_env: dict = {}, *args, **kwargs):
         """Execute qlib backtest using a conda-aware LocalEnv.
