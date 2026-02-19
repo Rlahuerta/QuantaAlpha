@@ -122,7 +122,7 @@ backtest:
     module_path: "qlib.contrib.strategy"
     kwargs:
       signal: "<PRED>"
-      topk: 50
+      topk: 30
       n_drop: 2
       # Alternative: SignalWeightedTopkStrategy (quantaalpha.backtest.strategy) with
       # weight_scheme: "linear_rank" — NOTE: only use with weekly rebalancing or
