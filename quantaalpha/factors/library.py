@@ -166,6 +166,7 @@ class FactorLibraryManager:
                     logger.debug(f"Decay enrichment skipped for {factor_name}: {_e}")
 
 
+        self._save()
         logger.info(
             f"Saved {len(sub_tasks)} factors to {self.library_path} (backtest_results: {len(backtest_results)} metrics)"
         )
