@@ -541,7 +541,55 @@ def run_evolution_loop(
         controller.pool.cleanup_file()
 
 
-@force_timeout()
+def _cleanup_experiment_caches() -> None:
+    """
+    Delete worker pickle caches (data/results/pickle_cache_*_w*) and any
+    log-embedded worker caches (log/*/pickle_cache_*) for THIS process's
+    experiment after the run ends. Keeps the main experiment cache intact
+    so resumed runs can reuse it.
+    """
+    import shutil
+    try:
+        from quantaalpha.core.conf import RD_AGENT_SETTINGS
+        main_cache = Path(RD_AGENT_SETTINGS.pickle_cache_folder_path_str)
+        results_dir = main_cache.parent
+
+        # Clean worker caches: siblings of main cache named <cache>_w<N>
+        prefix = main_cache.name + "_w"
+        removed, freed = 0, 0
+        for p in results_dir.glob(f"{prefix}*"):
+            if p.is_dir():
+                try:
+                    size = sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+                    shutil.rmtree(p, ignore_errors=True)
+                    removed += 1
+                    freed += size
+                except Exception:
+                    pass
+
+        # Also clean any legacy worker caches that landed in log/ (pre-fix runs)
+        log_dir = Path(__file__).resolve().parents[2] / "log"
+        for log_exp in log_dir.iterdir():
+            if not log_exp.is_dir():
+                continue
+            for wc in log_exp.glob("pickle_cache_*"):
+                if wc.is_dir():
+                    try:
+                        size = sum(f.stat().st_size for f in wc.rglob("*") if f.is_file())
+                        shutil.rmtree(wc, ignore_errors=True)
+                        removed += 1
+                        freed += size
+                    except Exception:
+                        pass
+
+        if removed:
+            logger.info(f"Auto-cleanup: removed {removed} worker cache dirs "
+                        f"({freed / 1024**3:.2f} GB freed)")
+    except Exception as e:
+        logger.warning(f"Auto-cleanup skipped: {e}")
+
+
+
 def main(path=None, step_n=100, direction=None, stop_event=None, config_path=None, evolution_mode=None, factor_lib_suffix=None):
     """
     Autonomous alpha factor mining with optional evolution support.
@@ -692,6 +740,7 @@ def main(path=None, step_n=100, direction=None, stop_event=None, config_path=Non
         raise
     finally:
         logger.info("Run finished or terminated")
+        _cleanup_experiment_caches()
 
 if __name__ == "__main__":
     fire.Fire(main)
