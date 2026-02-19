@@ -58,5 +58,10 @@ class FactorCoSTEERSettings(CoSTEERSettings):
     'cn' = CSI300 (default), 'us' = S&P500.
     Controls which factor_template subdirectory is injected into each workspace."""
 
+    lgb_num_threads: int = 20
+    """Number of LightGBM threads per qrun worker.
+    Reduce this when running multiple parallel workers to bound total CPU usage.
+    e.g. lgb_num_threads=10 with max_parallel_workers=2 → 20 CPUs total."""
+
 
 FACTOR_COSTEER_SETTINGS = FactorCoSTEERSettings()

@@ -666,6 +666,28 @@ class BacktestRunner:
             model.fit(dataset)
             print(f"[4/4] Train LightGBM done ({time.time()-train_start:.1f}s)")
 
+            # Save feature importance for analysis
+            try:
+                lgb_model = getattr(model, 'model', None)
+                if lgb_model is not None and hasattr(lgb_model, 'feature_importance'):
+                    fi_gain = lgb_model.feature_importance(importance_type='gain')
+                    fi_split = lgb_model.feature_importance(importance_type='split')
+                    feat_names = lgb_model.feature_name()
+                    fi_df = pd.DataFrame({
+                        'feature': feat_names,
+                        'importance_gain': fi_gain,
+                        'importance_split': fi_split,
+                    }).sort_values('importance_gain', ascending=False)
+                    _fi_out_dir = Path(self.config['experiment'].get('output_dir', './backtest_v2_results'))
+                    _fi_out_dir.mkdir(parents=True, exist_ok=True)
+                    fi_path = _fi_out_dir / f"{exp_name}_feature_importance.csv"
+                    fi_df.to_csv(fi_path, index=False)
+                    print(f"  Feature importance saved: {fi_path} ({len(fi_df)} features)")
+                    top20 = fi_df.head(20)['feature'].tolist()
+                    print(f"  Top-20 by gain: {top20}")
+            except Exception as fi_err:
+                logger.debug(f"Feature importance save failed: {fi_err}")
+
             # Two-stage training: retrain on train+val with best num_boost_round.
             # Adds ~20% more training data (the held-out validation year) before predicting test.
             pred = model.predict(dataset)

@@ -37,6 +37,10 @@ execution:
   use_local: true
   # Run branches in parallel using multiprocessing
   parallel_execution: false
+  # Maximum number of concurrent branch processes when parallel_execution: true
+  # 1 = sequential (lowest RAM); N = N branches run simultaneously
+  # With N workers set lgb_num_threads ≈ 20 // N in .env
+  max_parallel_workers: 1
   # Branch log root; used only when parallel planning enabled with >1 branches
   branch_log_root: log
   # Branch log prefix; log directory name format is {prefix}_{index}
@@ -73,6 +77,9 @@ evolution:
   # true: original round = all n directions in parallel; mutation/crossover rounds = all tasks in parallel
   # false: tasks run sequentially
   parallel_enabled: false
+  # Maximum concurrent tasks when parallel_enabled: true (0 or null = unlimited)
+  # Set to 2-5 to bound RAM: each worker uses ~400MB + LightGBM heap
+  max_parallel_workers: 2
 
   # Prefer diverse crossover combinations (different directions/phases) vs random parent selection
   prefer_diverse_crossover: true

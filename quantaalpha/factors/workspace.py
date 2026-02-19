@@ -97,6 +97,17 @@ class QlibFBWorkspace(_RdagentQlibFBWorkspace):
             if region_dir and region_dir.exists():
                 self.inject_code_from_folder(region_dir)
                 logger.info(f"Injected {region} market templates from {region_dir}")
+        # Apply lgb_num_threads override: patch num_threads in all YAML configs.
+        lgb_threads = FACTOR_COSTEER_SETTINGS.lgb_num_threads
+        if lgb_threads != 20:
+            for key in list(self.file_dict.keys()):
+                if key.endswith(".yaml") and "conf" in key:
+                    patched = self.file_dict[key].replace(
+                        "num_threads: 20", f"num_threads: {lgb_threads}"
+                    )
+                    if patched != self.file_dict[key]:
+                        self.file_dict[key] = patched
+                        logger.debug(f"Patched num_threads→{lgb_threads} in {key}")
 
     def execute(self, qlib_config_name: str = "conf.yaml", run_env: dict = {}, *args, **kwargs):
         """Execute qlib backtest using a conda-aware LocalEnv.

@@ -15,7 +15,7 @@ import fire
 import signal
 import sys
 import threading
-from multiprocessing import Process, Queue
+from multiprocessing import Process, Queue, Semaphore
 from functools import wraps
 import time
 import ctypes
@@ -83,6 +83,23 @@ def _run_branch(
     )
     model_loop.user_initial_direction = direction
     model_loop.run(step_n=step_n, stop_event=None)
+
+
+def _run_branch_with_semaphore(
+    semaphore: Semaphore,
+    direction: str | None,
+    step_n: int,
+    use_local: bool,
+    idx: int,
+    log_root: str,
+    log_prefix: str,
+    quality_gate_cfg: dict = None,
+):
+    """Wrapper around _run_branch that releases the semaphore when done."""
+    try:
+        _run_branch(direction, step_n, use_local, idx, log_root, log_prefix, quality_gate_cfg)
+    finally:
+        semaphore.release()
 
 
 def _run_evolution_task(
@@ -170,10 +187,12 @@ def _parallel_task_worker(
     log_root: str,
     result_queue: Queue,
     task_idx: int,
+    semaphore: Semaphore | None = None,
 ):
     """
     Worker for parallel evolution tasks. Runs one evolution task in a separate process and puts result in queue.
     Args: task, directions, step_n, use_local, user_direction, log_root, result_queue, task_idx.
+    The optional semaphore is released when this worker finishes (used for bounded concurrency).
     """
     try:
         from quantaalpha.core.conf import RD_AGENT_SETTINGS
@@ -206,6 +225,9 @@ def _parallel_task_worker(
             "error": str(e),
             "traceback": traceback.format_exc(),
         })
+    finally:
+        if semaphore is not None:
+            semaphore.release()
 
 
 def _serialize_task_for_parallel(task: dict[str, Any]) -> dict[str, Any]:
@@ -234,33 +256,53 @@ def _run_tasks_parallel(
     use_local: bool,
     user_direction: str | None,
     log_root: str,
+    max_workers: int = 0,
 ) -> list[dict[str, Any]]:
     """
-    Run multiple evolution tasks in parallel.
+    Run multiple evolution tasks with bounded concurrency.
+    max_workers: 0 or 1 = fully sequential (in-process); N>1 = up to N subprocesses at once.
     Returns list of results, each with task and traj_data.
     """
     if not tasks:
         return []
-    
+
+    # Sequential mode: run tasks one at a time in the current process
+    effective_workers = max(0, max_workers)
+    if effective_workers <= 1:
+        results = []
+        result_queue: Queue = Queue()
+        for idx, task in enumerate(tasks):
+            serialized_task = _serialize_task_for_parallel(task)
+            _parallel_task_worker(
+                serialized_task, directions, step_n, use_local,
+                user_direction, log_root, result_queue, idx, semaphore=None,
+            )
+            result = result_queue.get()
+            if result["success"]:
+                result["task"] = tasks[idx]
+                result["traj_data"]["task"] = tasks[idx]
+                results.append(result)
+                logger.info(f"Task {idx} completed (sequential)")
+            else:
+                logger.error(f"Task {idx} failed: {result['error']}")
+                logger.error(result.get("traceback", ""))
+        return results
+
+    # Bounded-parallel mode: semaphore limits concurrency to max_workers
+    sem = Semaphore(effective_workers)
     result_queue = Queue()
     processes = []
-    
-    logger.info(f"Starting {len(tasks)} parallel evolution tasks")
+
+    logger.info(f"Starting {len(tasks)} tasks (max_parallel_workers={effective_workers})")
 
     for idx, task in enumerate(tasks):
+        sem.acquire()  # blocks when effective_workers slots are all occupied
         serialized_task = _serialize_task_for_parallel(task)
-        
         p = Process(
             target=_parallel_task_worker,
             args=(
-                serialized_task,
-                directions,
-                step_n,
-                use_local,
-                user_direction,
-                log_root,
-                result_queue,
-                idx,
+                serialized_task, directions, step_n, use_local,
+                user_direction, log_root, result_queue, idx, sem,
             ),
         )
         p.start()
@@ -268,7 +310,7 @@ def _run_tasks_parallel(
         logger.info(f"Started task {idx}: phase={task['phase'].value}, direction={task['direction_id']}")
 
     results = []
-    for _ in range(len(tasks)):
+    for _ in range(len(processes)):
         result = result_queue.get()
         if result["success"]:
             original_task = tasks[result["task_idx"]]
@@ -278,13 +320,12 @@ def _run_tasks_parallel(
             logger.info(f"Task {result['task_idx']} completed")
         else:
             logger.error(f"Task {result['task_idx']} failed: {result['error']}")
-            logger.error(result.get('traceback', ''))
+            logger.error(result.get("traceback", ""))
 
     for p in processes:
         p.join()
 
     logger.info(f"Parallel tasks done: {len(results)}/{len(tasks)} succeeded")
-    
     return results
 
 
@@ -329,6 +370,7 @@ def run_evolution_loop(
     top_percent_threshold = float(evolution_cfg.get("top_percent_threshold", 0.3))
     log_root = str(logger.log_trace_path)
     parallel_enabled = bool(evolution_cfg.get("parallel_enabled", False))
+    max_parallel_workers = int(evolution_cfg.get("max_parallel_workers", 0) or 0)
     fresh_start = bool(evolution_cfg.get("fresh_start", True))
     cleanup_on_finish = bool(evolution_cfg.get("cleanup_on_finish", False))
 
@@ -396,7 +438,8 @@ def run_evolution_loop(
         logger.info("Mode: original only (no evolution)")
     logger.info(f"Parent selection: {parent_selection_strategy}" +
                (f" (top_percent={top_percent_threshold})" if parent_selection_strategy == "top_percent_plus_random" else ""))
-    logger.info(f"Parallel execution: {'on' if parallel_enabled else 'off'}")
+    logger.info(f"Parallel execution: {'on' if parallel_enabled else 'off'}" +
+               (f" (max_workers={max_parallel_workers})" if parallel_enabled and max_parallel_workers > 1 else ""))
     logger.info("="*60)
 
     if parallel_enabled:
@@ -421,6 +464,7 @@ def run_evolution_loop(
                 use_local=use_local,
                 user_direction=initial_direction,
                 log_root=log_root,
+                max_workers=max_parallel_workers,
             )
             
             completed_tasks = []
@@ -600,18 +644,24 @@ def main(path=None, step_n=100, direction=None, stop_event=None, config_path=Non
             log_prefix = exec_cfg.get("branch_log_prefix") or "branch"
             use_branch_logs = planning_enabled and len(directions) > 1
             parallel_execution = bool(exec_cfg.get("parallel_execution", False))
+            branch_max_workers = int(exec_cfg.get("max_parallel_workers", 0) or 0)
 
             if parallel_execution and len(directions) > 1:
+                # Bounded-parallel branch launch: semaphore limits concurrency
+                effective_workers = branch_max_workers if branch_max_workers > 1 else len(directions)
+                sem = Semaphore(effective_workers)
                 procs: list[Process] = []
                 for idx, dir_text in enumerate(directions, start=1):
                     if dir_text:
                         logger.info(f"[Planning] Branch {idx}/{len(directions)} direction: {dir_text}")
+                    sem.acquire()
                     p = Process(
-                        target=_run_branch,
-                        args=(dir_text, step_n, use_local, idx, log_root if use_branch_logs else "", log_prefix),
+                        target=_run_branch_with_semaphore,
+                        args=(sem, dir_text, step_n, use_local, idx, log_root if use_branch_logs else "", log_prefix),
                     )
                     p.start()
                     procs.append(p)
+                    logger.info(f"Started branch {idx} (max_workers={effective_workers})")
                 for p in procs:
                     p.join()
             else:
