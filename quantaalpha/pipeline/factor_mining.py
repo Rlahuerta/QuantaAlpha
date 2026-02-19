@@ -586,27 +586,27 @@ def _cleanup_experiment_caches() -> None:
             logger.info(f"Auto-cleanup: removed {removed} worker cache dirs "
                         f"({freed / 1024**3:.2f} GB freed)")
 
-        # Clean stale factor workspace dirs (data/results/workspace/<uuid>/)
-        # Each dir holds a temporary result.h5 (~163 MB) created during factor
-        # evaluation. Once the result is cached the dir is no longer needed.
-        # We remove dirs older than 30 minutes to avoid deleting in-progress ones.
+        # Clean stale workspace dirs for both quantaalpha and rdagent roots.
+        # - quantaalpha: data/results/workspace/<uuid>/ — result.h5 ~163 MB per factor
+        # - rdagent:     git_ignore_folder/RD-Agent_workspace/<uuid>/ — combined_factors_df.parquet ~300 MB
         ws_removed, ws_freed = 0, 0
         from quantaalpha.core.conf import RD_AGENT_SETTINGS as _rda
-        workspace_root = _rda.workspace_path
+        import rdagent.core.conf as _rdagent_conf
         cutoff = 30 * 60  # seconds
         now = __import__("time").time()
-        for ws_dir in workspace_root.iterdir():
-            if not ws_dir.is_dir():
-                continue
-            try:
-                age = now - ws_dir.stat().st_mtime
-                if age > cutoff:
-                    size = sum(f.stat().st_size for f in ws_dir.rglob("*") if f.is_file())
-                    shutil.rmtree(ws_dir, ignore_errors=True)
-                    ws_removed += 1
-                    ws_freed += size
-            except Exception:
-                pass
+        for workspace_root in [_rda.workspace_path, _rdagent_conf.RD_AGENT_SETTINGS.workspace_path]:
+            for ws_dir in workspace_root.iterdir():
+                if not ws_dir.is_dir():
+                    continue
+                try:
+                    age = now - ws_dir.stat().st_mtime
+                    if age > cutoff:
+                        size = sum(f.stat().st_size for f in ws_dir.rglob("*") if f.is_file())
+                        shutil.rmtree(ws_dir, ignore_errors=True)
+                        ws_removed += 1
+                        ws_freed += size
+                except Exception:
+                    pass
         if ws_removed:
             logger.info(f"Auto-cleanup: removed {ws_removed} stale workspace dirs "
                         f"({ws_freed / 1024**3:.2f} GB freed)")
@@ -649,22 +649,25 @@ def main(path=None, step_n=100, direction=None, stop_event=None, config_path=Non
     def _periodic_workspace_cleanup():
         import shutil, time as _time
         from quantaalpha.core.conf import RD_AGENT_SETTINGS as _rda
+        import rdagent.core.conf as _rdagent_conf
         while not _ws_stop.wait(timeout=30 * 60):
-            ws_root = _rda.workspace_path
             now = _time.time()
-            removed = freed = 0
-            try:
-                for d in ws_root.iterdir():
-                    if d.is_dir() and now - d.stat().st_mtime > 30 * 60:
-                        size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
-                        shutil.rmtree(d, ignore_errors=True)
-                        removed += 1
-                        freed += size
-                if removed:
-                    logger.info(f"Periodic workspace cleanup: {removed} dirs removed "
-                                f"({freed/1024**3:.2f} GB freed)")
-            except Exception:
-                pass
+            # Clean both workspace roots: quantaalpha CoSTEER workspaces and rdagent Qlib backtest workspaces
+            roots = [_rda.workspace_path, _rdagent_conf.RD_AGENT_SETTINGS.workspace_path]
+            for ws_root in roots:
+                removed = freed = 0
+                try:
+                    for d in ws_root.iterdir():
+                        if d.is_dir() and now - d.stat().st_mtime > 30 * 60:
+                            size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+                            shutil.rmtree(d, ignore_errors=True)
+                            removed += 1
+                            freed += size
+                    if removed:
+                        logger.info(f"Periodic workspace cleanup ({ws_root.name}): {removed} dirs removed "
+                                    f"({freed/1024**3:.2f} GB freed)")
+                except Exception:
+                    pass
 
     _ws_thread = _threading.Thread(target=_periodic_workspace_cleanup, daemon=True, name="ws-cleaner")
     _ws_thread.start()
