@@ -1,0 +1,118 @@
+######################################################################
+# Backtest override for US (S&P 500) using Yahoo-derived Qlib us_data
+# Target protocol follows paper date splits; data coverage must be checked.
+######################################################################
+
+random_seed: 42
+
+experiment:
+  name: "backtest_us_yahoo_sp500"
+  recorder: "backtest_us_yahoo_recorder"
+  output_dir: "data/results/backtest_us_yahoo_results"
+  output_metrics_file: "backtest_metrics_us_yahoo.json"
+
+factor_source:
+  # Use mined factors for transfer evaluation (pass --factor-json).
+  type: "custom"
+  custom:
+    json_files: []
+    quality_filter: null
+    max_factors: null
+    use_llm_for_incompatible: true
+  combined:
+    official_source: "alpha158_20"
+    include_custom: true
+
+data:
+  provider_uri: "./data/qlib/us_data_2025"
+  parquet_bundle_dir: "./data/sp500_parquet_bundle"
+  region: "us"
+  market: "sp500"
+  start_time: "2016-01-01"
+  end_time: "2025-12-23"
+
+dataset:
+  label: "Ref($close, -2) / Ref($close, -1) - 1"
+  learn_processors:
+    - class: "Fillna"
+      kwargs:
+        fields_group: "feature"
+    - class: "ProcessInf"
+    - class: "DropnaLabel"
+    - class: "CSRankNorm"
+      kwargs:
+        fields_group: "feature"
+    - class: "CSRankNorm"
+      kwargs:
+        fields_group: "label"
+  infer_processors:
+    - class: "Fillna"
+      kwargs:
+        fields_group: "feature"
+    - class: "ProcessInf"
+    - class: "CSRankNorm"
+      kwargs:
+        fields_group: "feature"
+    - class: "CSRankNorm"
+      kwargs:
+        fields_group: "label"
+  segments:
+    train: ["2016-01-01", "2020-12-31"]
+    valid: ["2021-01-01", "2021-12-31"]
+    test:  ["2022-01-01", "2025-12-24"]
+
+model:
+  type: "lgb"
+  params:
+    loss: "mse"
+    learning_rate: 0.1
+    max_depth: 8
+    num_leaves: 210
+    colsample_bytree: 0.8879
+    subsample: 0.8789
+    lambda_l1: 205.6999
+    lambda_l2: 580.9768
+    num_threads: 20
+    seed: 42
+    random_state: 42
+    early_stopping_round: 50
+    num_boost_round: 500
+    min_child_samples: 100
+    feature_fraction_bynode: 0.8
+
+backtest:
+  strategy:
+    class: "TopkDropoutStrategy"
+    module_path: "qlib.contrib.strategy"
+    kwargs:
+      signal: "<PRED>"
+      topk: 30
+      n_drop: 2
+  backtest:
+    start_time: "2022-01-01"
+    end_time: "2025-12-23"
+    account: 100000000
+    # Yahoo Qlib bundle: use a major S&P500 constituent as benchmark proxy.
+    # SPY/^GSPC are not in the Qlib instrument universe; AAPL closely tracks the index.
+    benchmark: "AAPL"
+    exchange_kwargs:
+      limit_threshold: 0.095
+      deal_price: "open"
+      open_cost: 0.0005
+      close_cost: 0.0015
+      min_cost: 5
+
+llm:
+  enabled: true
+  timeout: 300
+  max_retries: 3
+  cache_results: true
+  cache_dir: "data/results/factor_cache_us"
+  auto_extract_cache: false
+  debug: false
+
+factor_calculation:
+  output_dir: "data/results/computed_factors"
+  save_intermediate: true
+  n_jobs: 4
+  data_file: null

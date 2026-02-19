@@ -164,7 +164,11 @@ class QlibFBWorkspace(_RdagentQlibFBWorkspace):
         qlib_data_dir = os.environ.get("QLIB_DATA_DIR") or os.environ.get("QLIB_PROVIDER_URI")
         if qlib_data_dir:
             source = Path(qlib_data_dir).expanduser().resolve()
-            target = Path.home() / ".qlib" / "qlib_data" / "cn_data"
+            # Use market-region-specific symlink name so CN and US mining can coexist.
+            from quantaalpha.factors.coder.config import FACTOR_COSTEER_SETTINGS
+            region = FACTOR_COSTEER_SETTINGS.market_region.lower()
+            symlink_name = "us_data" if region == "us" else "cn_data"
+            target = Path.home() / ".qlib" / "qlib_data" / symlink_name
             if source.exists():
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if target.is_symlink():
