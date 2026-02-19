@@ -399,6 +399,7 @@ class BacktestRunner:
             raise ValueError("No rows after index alignment; cannot run backtest")
         combined_df = pd.concat([features_df, label_df], axis=1)
         from qlib.data.dataset.processor import Fillna, ProcessInf, CSRankNorm, DropnaLabel
+        from .custom_factor_calculator import FACTOR_DTYPE
         feature_cols = list(features_df.columns)
         label_cols = list(label_df.columns)
         combined_df[feature_cols] = combined_df[feature_cols].fillna(0)
@@ -407,12 +408,12 @@ class BacktestRunner:
         for col in feature_cols:
             combined_df[col] = combined_df.groupby(level=dt_level)[col].transform(
                 lambda x: (x.rank(pct=True) - 0.5) if len(x) > 1 else 0
-            )
+            ).astype(FACTOR_DTYPE)
         combined_df = combined_df.dropna(subset=label_cols)
         for col in label_cols:
             combined_df[col] = combined_df.groupby(level=dt_level)[col].transform(
                 lambda x: (x.rank(pct=True) - 0.5) if len(x) > 1 else 0
-            )
+            ).astype(FACTOR_DTYPE)
         
         logger.debug(f"  Rows after preprocessing: {len(combined_df)}")
         feature_tuples = [('feature', col) for col in feature_cols]

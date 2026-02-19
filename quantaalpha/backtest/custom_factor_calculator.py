@@ -68,6 +68,9 @@ class CustomFactorCalculator:
         # Skip market-specific caches when running cross-market (non-CN) backtest
         data_cfg = (config or {}).get('data', {})
         self._skip_market_cache = data_cfg.get('region', 'cn').lower() != 'cn'
+        # Market universe for filtering (loaded lazily, reduces per-factor RAM ~20×)
+        self._market: str = data_cfg.get('market', 'csi300')
+        self._market_instruments: Optional[frozenset] = None
         
         if data_df is not None and len(data_df) > 0:
             self._prepare_data()
@@ -109,7 +112,89 @@ class CustomFactorCalculator:
     def _get_cache_key(self, expr: str) -> str:
         """Cache key from expression MD5 hash."""
         return hashlib.md5(expr.encode()).hexdigest()
-    
+
+    def _get_market_instruments(self) -> Optional[frozenset]:
+        """Lazily load the set of instrument codes for the configured market (e.g. CSI300).
+        
+        Filters factor Series to this set immediately after loading, reducing RAM ~20× when
+        the cached H5 files cover the full A-share universe (~6000 stocks) but the backtest
+        only needs the market subset (~300 stocks).
+        """
+        if self._market_instruments is not None:
+            return self._market_instruments
+        try:
+            from qlib.data import D
+            inst_list = D.list_instruments(D.instruments(self._market), as_list=True)
+            if inst_list:
+                self._market_instruments = frozenset(str(i).upper() for i in inst_list)
+                logger.debug(f"Loaded {len(self._market_instruments)} instruments for market '{self._market}'")
+                return self._market_instruments
+        except Exception as e:
+            logger.debug(f"Could not load market instruments from qlib ({e}); skipping universe filter")
+        return None
+
+    def _filter_to_instruments(self, series: pd.Series, instruments: frozenset) -> pd.Series:
+        """Keep only rows whose instrument-level value is in `instruments`."""
+        if not isinstance(series.index, pd.MultiIndex):
+            return series
+        try:
+            inst_vals = series.index.get_level_values('instrument').astype(str).str.upper()
+        except KeyError:
+            # Level might be positional
+            inst_vals = series.index.get_level_values(1).astype(str).str.upper()
+        mask = inst_vals.isin(instruments)
+        return series.loc[mask]
+
+    def _load_factor_h5_fast(self, h5_path: str,
+                              instruments: Optional[frozenset] = None) -> Optional[pd.Series]:
+        """Load a factor result.h5 via h5py, optionally filtering to `instruments`.
+        
+        Avoids constructing a full 14 M-row pandas MultiIndex when only ~300 rows per day
+        are needed, cutting load time from minutes to sub-second.
+        """
+        try:
+            import h5py  # type: ignore
+        except ImportError:
+            return None
+        try:
+            with h5py.File(h5_path, "r") as fh:
+                keys = list(fh.keys())
+                if not keys:
+                    return None
+                grp = fh[keys[0]]
+                if "values" not in grp:
+                    return None
+                raw = grp["values"][:]             # float64, shape (N,)
+                dates_ns = grp["index_level0"][:]  # int64 nanoseconds
+                inst_bytes = grp["index_level1"][:]
+                label_dates = grp["index_label0"][:]  # int16/int32 indices
+                label_insts = grp["index_label1"][:]
+
+            all_insts = np.array([b.decode() for b in inst_bytes])
+
+            if instruments is not None:
+                inst_upper = np.char.upper(all_insts)
+                in_market = np.isin(inst_upper, list(instruments))
+                row_mask = in_market[label_insts]
+            else:
+                row_mask = np.ones(len(raw), dtype=bool)
+
+            if not row_mask.any():
+                return None
+
+            raw_f = raw[row_mask]
+            ld = label_dates[row_mask]
+            li = label_insts[row_mask]
+
+            dt_vals = pd.to_datetime(dates_ns[ld], unit="ns")
+            inst_vals = all_insts[li]
+            idx = pd.MultiIndex.from_arrays([dt_vals, inst_vals],
+                                            names=["datetime", "instrument"])
+            return pd.Series(raw_f, index=idx, dtype=FACTOR_DTYPE).sort_index()
+        except Exception as exc:
+            logger.debug("_load_factor_h5_fast failed for %s: %s", h5_path, exc)
+            return None
+
     def _load_from_cache(self, expr: str) -> Optional[pd.Series]:
         """Load factor values from MD5 cache. Skipped for non-CN markets (stale data risk)."""
         if self._skip_market_cache:
@@ -132,19 +217,29 @@ class CustomFactorCalculator:
             return None
         if not cache_location:
             return None
-        
+
         result_h5_path = cache_location.get('result_h5_path', '')
         if not result_h5_path:
             return None
-        
+
         h5_file = Path(result_h5_path)
         if not h5_file.exists():
             logger.debug(f"Cache file not found: {result_h5_path}")
             return None
-        
+
+        # Fast path: h5py with immediate instrument filter (avoids 14 M-row MultiIndex)
+        instruments = self._get_market_instruments()
+        result = self._load_factor_h5_fast(str(h5_file), instruments)
+        if result is not None:
+            return result
+
+        # Fallback: pandas read_hdf then filter
         try:
             result = pd.read_hdf(str(h5_file))
-            return self._process_cached_result(result, result_h5_path)
+            result = self._process_cached_result(result, result_h5_path)
+            if result is not None and instruments is not None:
+                result = self._filter_to_instruments(result, instruments)
+            return result
         except Exception as e:
             logger.debug(f"Load from cache_location failed [{result_h5_path}]: {e}")
             return None
@@ -167,8 +262,13 @@ class CustomFactorCalculator:
                 if cache_idx_names != expected_order and set(cache_idx_names) == set(expected_order):
                     result = result.swaplevel()
                     result = result.sort_index()
-            
-            return result.astype(FACTOR_DTYPE)
+
+            result = result.astype(FACTOR_DTYPE)
+            # Filter to market universe immediately to reduce accumulated RAM
+            instruments = self._get_market_instruments()
+            if instruments is not None:
+                result = self._filter_to_instruments(result, instruments)
+            return result
         except Exception as e:
             logger.debug(f"Process cached result failed [{source}]: {e}")
             return None
@@ -326,128 +426,145 @@ class CustomFactorCalculator:
     def calculate_factors_batch(self, factors: List[Dict], use_cache: bool = True,
                                 skip_compute: bool = False) -> pd.DataFrame:
         """
-        Batch compute factors. Priority: 1) cache_location (result.h5),
-        2) MD5 cache (factor_cache dir), 3) recompute from factor_expression
-        (skipped when skip_compute=True). skip_compute=True skips cache misses.
+        Streaming batch loader. Factors are loaded one at a time and their numpy values
+        are appended to a column list; the Series objects are freed immediately.
+
+        Memory profile: O(n_rows × n_cols × 2 bytes) — no accumulation of pandas
+        MultiIndex objects, which saved ~12 GB for 338 factors vs the old dict approach.
         """
+        import gc
         import time as _time
-        
+        import signal as _signal
+
+        class _FactorTimeout(Exception):
+            pass
+
         if use_cache and self.auto_extract_cache:
             self._auto_extract_cache_from_logs()
-        
-        results = {}
-        success_count = 0
-        fail_count = 0
-        cache_hit_count = 0
-        cache_location_hit_count = 0
-        compute_count = 0
-        failed_names = []
+
+        instruments = self._get_market_instruments()
+
+        # reference_index is set from the first successfully loaded factor; all
+        # subsequent factors are aligned to it via reindex (produces NaN for gaps).
+        reference_index = None
+        columns_data: List[np.ndarray] = []   # one 1-D float16 array per factor
+        col_names: List[str] = []
+
+        success_count = fail_count = cache_location_hit = cache_hit = compute_count = 0
+        failed_names: List[str] = []
+        need_compute_factors: List = []
         total = len(factors)
-        need_compute_factors = []
-        
-        # Pass 1: load from cache
+
+        def _accept(series: pd.Series, name: str) -> bool:
+            """Extract aligned numpy values and append to columns_data. Frees no refs."""
+            nonlocal reference_index
+            if series is None or series.isna().all():
+                return False
+            try:
+                if reference_index is None:
+                    reference_index = series.index
+                vals = series.reindex(reference_index).values.astype(FACTOR_DTYPE)
+                columns_data.append(vals)
+                col_names.append(name)
+                return True
+            except Exception as exc:
+                logger.debug("_accept alignment failed for %s: %s", name, exc)
+                return False
+
+        # Pass 1: load from cache (h5py fast path, already filtered to market instruments)
         for i, factor_info in enumerate(factors):
             factor_name = factor_info.get('factor_name', 'unknown')
             factor_expr = factor_info.get('factor_expression', '')
             cache_location = factor_info.get('cache_location')
-            
+
             if not factor_expr:
                 fail_count += 1
                 failed_names.append(factor_name)
                 continue
-            
-            result = None
-            
+
+            series = None
+
             if use_cache and cache_location:
                 h5_path = cache_location.get('result_h5_path', '')
                 if h5_path:
-                    result = self._load_from_cache_location(cache_location)
-                    if result is not None:
-                        cache_location_hit_count += 1
-                        results[factor_name] = result
-                        success_count += 1
-                        print(f"  [{i+1}/{total}] ✓ H5 cache: {factor_name}")
-                        continue
-            
-            if use_cache:
-                result = self._load_from_cache(factor_expr)
-                if result is not None:
-                    cache_hit_count += 1
-                    results[factor_name] = result
+                    series = self._load_from_cache_location(cache_location)
+                    if series is not None:
+                        cache_location_hit += 1
+
+            if series is None and use_cache:
+                series = self._load_from_cache(factor_expr)
+                if series is not None:
+                    cache_hit += 1
+
+            if series is not None:
+                if _accept(series, factor_name):
                     success_count += 1
-                    print(f"  [{i+1}/{total}] ✓ MD5 cache: {factor_name}")
-                    continue
-            
-            need_compute_factors.append((i, factor_info))
-            print(f"  [{i+1}/{total}] ⏳ Pending: {factor_name}")
-        
+                    print(f"  [{i+1}/{total}] ✓ cache: {factor_name}")
+                else:
+                    fail_count += 1
+                    failed_names.append(factor_name)
+                del series  # free MultiIndex memory immediately
+            else:
+                need_compute_factors.append((i, factor_info))
+                print(f"  [{i+1}/{total}] ⏳ Pending: {factor_name}")
+
+            if (i + 1) % 50 == 0:
+                gc.collect()
+
         # Pass 2: compute uncached factors
         if need_compute_factors:
             if skip_compute:
-                skipped_count = len(need_compute_factors)
-                skipped_names = [f.get('factor_name', 'unknown') for _, f in need_compute_factors]
-                print(f"  Skipping {skipped_count} uncached factors (skip_compute=True)")
-                if skipped_names:
-                    print(f"  Skipped: {', '.join(skipped_names)}")
+                skipped = [fi.get('factor_name', 'unknown') for _, fi in need_compute_factors]
+                print(f"  Skipping {len(skipped)} uncached factors (skip_compute=True)")
+                fail_count += len(skipped)
+                failed_names.extend(skipped)
             else:
                 print(f"  Computing {len(need_compute_factors)} factors from expressions...")
-                
                 for idx, (orig_i, factor_info) in enumerate(need_compute_factors):
                     factor_name = factor_info.get('factor_name', 'unknown')
                     factor_expr = factor_info.get('factor_expression', '')
-                    
-                    print(f"  Compute [{idx+1}/{len(need_compute_factors)}]: {factor_name} ...", end='', flush=True)
+                    print(f"  Compute [{idx+1}/{len(need_compute_factors)}]: {factor_name} ...",
+                          end='', flush=True)
                     t0 = _time.time()
-                    
+
+                    old_handler = None
                     try:
-                        import signal as _signal
-                        
-                        class _FactorTimeout(Exception):
-                            pass
-                        
-                        def _timeout_handler(signum, frame):
+                        def _timeout_handler(s, f):
                             raise _FactorTimeout()
-                        
-                        old_handler = None
-                        try:
-                            old_handler = _signal.signal(_signal.SIGALRM, _timeout_handler)
-                            _signal.alarm(120)
-                        except (AttributeError, ValueError):
-                            pass
-                        
+                        old_handler = _signal.signal(_signal.SIGALRM, _timeout_handler)
+                        _signal.alarm(120)
+                    except (AttributeError, ValueError):
+                        pass
+
+                    try:
                         result = self.calculate_factor(factor_name, factor_expr)
-                        
-                        try:
-                            _signal.alarm(0)
-                            if old_handler is not None:
-                                _signal.signal(_signal.SIGALRM, old_handler)
-                        except (AttributeError, ValueError):
-                            pass
-                        
                     except _FactorTimeout:
-                        elapsed = _time.time() - t0
-                        print(f" ✗ Timeout ({elapsed:.1f}s)")
+                        print(f" ✗ Timeout ({_time.time()-t0:.1f}s)")
                         fail_count += 1
                         failed_names.append(f"{factor_name}(timeout)")
+                        result = None
+                    except Exception as e:
+                        print(f" ✗ Error ({_time.time()-t0:.1f}s): {str(e)[:80]}")
+                        fail_count += 1
+                        failed_names.append(factor_name)
+                        result = None
+                    finally:
                         try:
                             _signal.alarm(0)
                             if old_handler is not None:
                                 _signal.signal(_signal.SIGALRM, old_handler)
                         except (AttributeError, ValueError):
                             pass
+
+                    if result is None:
                         continue
-                    except Exception as e:
-                        elapsed = _time.time() - t0
-                        print(f" ✗ Error ({elapsed:.1f}s): {str(e)[:80]}")
-                        fail_count += 1
-                        failed_names.append(factor_name)
-                        continue
-                    
+
                     elapsed = _time.time() - t0
-                    
-                    if result is not None and len(result) > 0:
-                        if not result.isna().all():
-                            results[factor_name] = result
+                    if len(result) > 0 and not result.isna().all():
+                        if instruments is not None:
+                            result = self._filter_to_instruments(result, instruments)
+                        result = result.astype(FACTOR_DTYPE)
+                        if _accept(result, factor_name):
                             success_count += 1
                             compute_count += 1
                             print(f" ✓ ({elapsed:.1f}s)")
@@ -456,37 +573,30 @@ class CustomFactorCalculator:
                         else:
                             fail_count += 1
                             failed_names.append(factor_name)
-                            print(f" ✗ All NaN ({elapsed:.1f}s)")
+                            print(f" ✗ NaN ({elapsed:.1f}s)")
+                        del result
                     else:
                         fail_count += 1
                         failed_names.append(factor_name)
-                        print(f" ✗ Failed ({elapsed:.1f}s)")
-        
+                        print(f" ✗ Failed ({_time.time()-t0:.1f}s)")
+
         print(f"Factor load done: success {success_count}, failed {fail_count} | "
-              f"H5 cache {cache_location_hit_count}, MD5 cache {cache_hit_count}, computed {compute_count}")
+              f"H5 cache {cache_location_hit}, MD5 cache {cache_hit}, computed {compute_count}")
         if failed_names:
             print(f"  Failed: {', '.join(failed_names)}")
-        
-        if not results:
+
+        if not columns_data:
             return pd.DataFrame()
-        
-        # Align results to common index
-        aligned_results = {}
-        reference_index = None
-        
-        for name, series in results.items():
-            if reference_index is None:
-                reference_index = series.index
-            validated = self._validate_and_align_result(series, name, reference_index)
-            if validated is not None:
-                aligned_results[name] = validated
-        
-        if aligned_results:
-            result_df = pd.DataFrame(aligned_results).astype(FACTOR_DTYPE)
-            logger.debug(f"  Result DataFrame: {result_df.shape}")
-            return result_df
-        
-        return pd.DataFrame()
+
+        gc.collect()
+        # np.column_stack: one allocation of (n_rows × n_cols), then free the list
+        data_matrix = np.column_stack(columns_data).astype(FACTOR_DTYPE)
+        del columns_data
+        gc.collect()
+        result_df = pd.DataFrame(data_matrix, index=reference_index, columns=col_names)
+        del data_matrix
+        logger.debug("  Streaming result DataFrame: %s", result_df.shape)
+        return result_df
     
     def _validate_and_align_result(self, result: pd.Series, factor_name: str, 
                                     reference_index: Optional[pd.Index] = None) -> Optional[pd.Series]:
