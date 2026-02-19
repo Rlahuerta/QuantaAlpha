@@ -13,7 +13,7 @@ def datatype_adapter(func):
         if len(args) == 1 and isinstance(args[0], (float, int)):
             new_args = (pd.DataFrame([args[0]]),)
             result = func(*new_args, **kwargs)
-            return float(result.iloc[0])
+            return float(result.iloc[0, 0])
         if (len(args) == 2 and isinstance(args[0], np.ndarray) and not isinstance(args[1], np.ndarray)):
             new_args = (pd.DataFrame(args[0]), args[1])
             result = func(*new_args, **kwargs)

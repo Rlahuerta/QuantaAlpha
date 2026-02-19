@@ -62,7 +62,8 @@ class CoSTEER(Developer[Experiment]):
 
     def load_or_init_knowledge_base(self, former_knowledge_base_path: Path = None, component_init_list: list = []):
         if former_knowledge_base_path is not None and former_knowledge_base_path.exists():
-            knowledge_base = pickle.load(open(former_knowledge_base_path, "rb"))
+            with open(former_knowledge_base_path, "rb") as f:
+                knowledge_base = pickle.load(f)
             if self.evolving_version == 1 and not isinstance(knowledge_base, CoSTEERKnowledgeBaseV1):
                 raise ValueError("The former knowledge base is not compatible with the current version")
             elif self.evolving_version == 2 and not isinstance(
@@ -102,7 +103,8 @@ class CoSTEER(Developer[Experiment]):
 
         # save new knowledge base
         if self.new_knowledge_base_path is not None:
-            pickle.dump(self.knowledge_base, open(self.new_knowledge_base_path, "wb"))
+            with open(self.new_knowledge_base_path, "wb") as f:
+                pickle.dump(self.knowledge_base, f)
             logger.info(f"New knowledge base saved to {self.new_knowledge_base_path}")
         exp.sub_workspace_list = experiment.sub_workspace_list
         return exp

@@ -1,4 +1,4 @@
-from pyparsing import Word, alphas, alphanums, infixNotation, opAssoc, one_of, Optional, delimitedList, Forward, Group
+from pyparsing import Word, alphas, alphanums, infix_notation, OpAssoc, one_of, Optional, DelimitedList, Forward, Group
 from pyparsing import ParserElement, ParseException, ParseResults
 from pyparsing import Regex, Combine, Literal
 from dataclasses import dataclass
@@ -209,37 +209,37 @@ def create_unary_op_node(tokens):
 expr = Forward()
 
 # Basic elements
-var.setParseAction(create_var_node)
-number.setParseAction(create_number_node)
+var.set_parse_action(create_var_node)
+number.set_parse_action(create_number_node)
 
 # Function call
-function_call = var + "(" + Optional(delimitedList(expr)) + ")"
-function_call.setParseAction(create_function_node)
+function_call = var + "(" + Optional(DelimitedList(expr)) + ")"
+function_call.set_parse_action(create_function_node)
 
 # Operands
-operand = function_call | var | number | ("(" + expr + ")").setParseAction(lambda tokens: tokens[1])
+operand = function_call | var | number | ("(" + expr + ")").set_parse_action(lambda tokens: tokens[1])
 
 # Unary operators (highest precedence)
 unary_minus = Literal("-")
 
 # Complete expression
-expr <<= infixNotation(
+expr <<= infix_notation(
     operand,
     [
-        (unary_minus, 1, opAssoc.RIGHT, create_unary_op_node),
-        (mul_div, 2, opAssoc.LEFT, create_binary_op_node),
-        (add_sub, 2, opAssoc.LEFT, create_binary_op_node),
-        (comparison, 2, opAssoc.LEFT, create_binary_op_node),
-        (logical_and, 2, opAssoc.LEFT, create_binary_op_node),
-        (logical_or, 2, opAssoc.LEFT, create_binary_op_node),
-        (conditional, 3, opAssoc.RIGHT, create_conditional_node),
+        (unary_minus, 1, OpAssoc.RIGHT, create_unary_op_node),
+        (mul_div, 2, OpAssoc.LEFT, create_binary_op_node),
+        (add_sub, 2, OpAssoc.LEFT, create_binary_op_node),
+        (comparison, 2, OpAssoc.LEFT, create_binary_op_node),
+        (logical_and, 2, OpAssoc.LEFT, create_binary_op_node),
+        (logical_or, 2, OpAssoc.LEFT, create_binary_op_node),
+        (conditional, 3, OpAssoc.RIGHT, create_conditional_node),
     ]
 )
 
 def parse_expression(text: str) -> Node:
     """Parse an expression and return its AST."""
     try:
-        result = expr.parseString(text, parseAll=True)
+        result = expr.parse_string(text, parse_all=True)
         return result[0]  # Extract the first element from ParseResults
     except ParseException as e:
         raise ValueError(f"Failed to parse expression: {str(e)}")

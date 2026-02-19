@@ -76,7 +76,7 @@ evolution:
   # Parallel execution within each evolution phase
   # true: original round = all n directions in parallel; mutation/crossover rounds = all tasks in parallel
   # false: tasks run sequentially
-  parallel_enabled: false
+  parallel_enabled: true
   # Maximum concurrent tasks when parallel_enabled: true (0 or null = unlimited)
   # Set to 2-5 to bound RAM: each worker uses ~400MB + LightGBM heap
   max_parallel_workers: 2

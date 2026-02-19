@@ -187,7 +187,7 @@ def _parallel_task_worker(
     log_root: str,
     result_queue: Queue,
     task_idx: int,
-    semaphore: Semaphore | None = None,
+    semaphore: Any = None,
 ):
     """
     Worker for parallel evolution tasks. Runs one evolution task in a separate process and puts result in queue.

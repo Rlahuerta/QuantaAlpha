@@ -22,6 +22,7 @@ class KnowledgeBase:
     def dump(self) -> None:
         if self.path is not None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            pickle.dump(self.__dict__, self.path.open("wb"))
+            with self.path.open("wb") as f:
+                pickle.dump(self.__dict__, f)
         else:
             logger.warning("KnowledgeBase path is not set, dump failed.")

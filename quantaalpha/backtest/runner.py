@@ -582,7 +582,7 @@ class BacktestRunner:
                 w = pd.Series(np.ones(len(top)) / len(top), index=top.index)
             return float((top["next_ret"] * w).sum())
 
-        strat_ret = merged.groupby("datetime", sort=True).apply(_daily_ret)
+        strat_ret = merged.groupby("datetime", sort=True).apply(_daily_ret, include_groups=False)
 
         b = bench[["datetime", "open"]].copy().sort_values("datetime")
         b["bench_ret"] = b["open"].shift(-1) / b["open"] - 1

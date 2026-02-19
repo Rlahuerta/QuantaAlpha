@@ -52,12 +52,12 @@ def test_invalid_operator_and_parentheses_errors():
 
 
 def test_parse_expression_recursion_error_path(monkeypatch):
-    original_parse_string = expr_parser_module.expr.parseString
+    original_parse_string = expr_parser_module.expr.parse_string
 
     def _raise_recursion(*args, **kwargs):
         raise RecursionError("deep recursion")
 
-    monkeypatch.setattr(expr_parser_module.expr, "parseString", _raise_recursion)
+    monkeypatch.setattr(expr_parser_module.expr, "parse_string", _raise_recursion)
     with pytest.raises(ParseException, match="recursion error"):
         parse_expression("$close + $open")
-    monkeypatch.setattr(expr_parser_module.expr, "parseString", original_parse_string)
+    monkeypatch.setattr(expr_parser_module.expr, "parse_string", original_parse_string)

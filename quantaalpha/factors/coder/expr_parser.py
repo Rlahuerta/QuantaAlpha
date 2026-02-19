@@ -1,4 +1,4 @@
-from pyparsing import Word, alphas, alphanums, infixNotation, opAssoc, oneOf, Optional, delimitedList, Forward, Group
+from pyparsing import Word, alphas, alphanums, infix_notation, OpAssoc, one_of, Optional, DelimitedList, Forward, Group
 from pyparsing import ParseException
 from pyparsing import Regex, Combine, Literal
 import sys
@@ -7,13 +7,13 @@ import numpy as np
 
 # Use pyparsing packrat for faster nested parsing
 from pyparsing import ParserElement
-ParserElement.enablePackrat()
+ParserElement.enable_packrat()
 
 sys.setrecursionlimit(5000)
 
 var = (
     Combine(Optional(Literal("$")) + Word(alphas, alphanums + "_"))
-).setName("variable")
+).set_name("variable")
 # var = Word(alphas, alphanums + "_")
 
 # Number: int/float, optional sign, optional scientific notation
@@ -21,11 +21,11 @@ number_pattern = r"[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?"
 number = Regex(number_pattern)
 
 # Operators
-mul_div = oneOf("* /", useRegex=True)
-add_minus = oneOf("+ -")
-comparison_op = oneOf("> < >= <= == !=")
-logical_and = oneOf("&& &")
-logical_or = oneOf("|| |")
+mul_div = one_of("* /", use_regex=True)
+add_minus = one_of("+ -")
+comparison_op = one_of("> < >= <= == !=")
+logical_and = one_of("&& &")
+logical_or = one_of("|| |")
 conditional_op = ("?", ":")
 
 
@@ -237,14 +237,14 @@ def parse_function_call(s, loc, tokens):
 
 expr = Forward()
 
-unary_op = Optional(oneOf("+ -")).setParseAction(lambda t: t[0] if t else '')
-function_call = var + '(' + Optional(delimitedList(expr)) + ')'
-function_call.setParseAction(parse_function_call)
+unary_op = Optional(one_of("+ -")).set_parse_action(lambda t: t[0] if t else '')
+function_call = var + '(' + Optional(DelimitedList(expr)) + ')'
+function_call.set_parse_action(parse_function_call)
 nested_expr = Group('(' + expr + ')')
 
 operand =  Group(unary_op + (function_call | var | number | nested_expr | expr))
 
-# unary_operand = oneOf("+ -") + operand
+# unary_operand = one_of("+ -") + operand
 # unary_operand.setParseAction(lambda tokens: ''.join(tokens))
 # operand = (unary_operand | function_call | var | number )
 
@@ -264,14 +264,14 @@ def check_for_invalid_operators(expression):
         raise Exception(f"Invalid operator(s): \"{''.join(invalid_operators)}\"")
 
 
-expr <<= infixNotation(operand, 
+expr <<= infix_notation(operand, 
     [
-        (mul_div, 2, opAssoc.LEFT, parse_arith_op),
-        (add_minus, 2, opAssoc.LEFT, parse_arith_op),
-        (comparison_op, 2, opAssoc.LEFT, parse_comparison_op),
-        (logical_and, 2, opAssoc.LEFT, parse_logical_expression),
-        (logical_or, 2, opAssoc.LEFT, parse_logical_expression),
-        (conditional_op, 3, opAssoc.RIGHT, parse_conditional_expression)
+        (mul_div, 2, OpAssoc.LEFT, parse_arith_op),
+        (add_minus, 2, OpAssoc.LEFT, parse_arith_op),
+        (comparison_op, 2, OpAssoc.LEFT, parse_comparison_op),
+        (logical_and, 2, OpAssoc.LEFT, parse_logical_expression),
+        (logical_or, 2, OpAssoc.LEFT, parse_logical_expression),
+        (conditional_op, 3, OpAssoc.RIGHT, parse_conditional_expression)
     ])
 
     
@@ -279,7 +279,7 @@ def check_parentheses_balance(expr):
     if expr.count('(') != expr.count(')'):
         raise ParseException("Unclosed parentheses")
 
-expr.setParseAction(parse_entire_expression)
+expr.set_parse_action(parse_entire_expression)
 
 def preprocess_unary_minus(factor_expression):
     """Preprocess unary minus: convert -x to (-1 * x) for parser."""
@@ -353,7 +353,7 @@ def parse_expression(factor_expression):
     
     factor_expression = preprocess_unary_minus(factor_expression)
     try:
-        parsed_data_function = expr.parseString(factor_expression, parseAll=True)[0]
+        parsed_data_function = expr.parse_string(factor_expression, parse_all=True)[0]
     except RecursionError as e:
         raise ParseException(f"Expression parse recursion error: {e}") from e
     return parsed_data_function
