@@ -585,6 +585,31 @@ def _cleanup_experiment_caches() -> None:
         if removed:
             logger.info(f"Auto-cleanup: removed {removed} worker cache dirs "
                         f"({freed / 1024**3:.2f} GB freed)")
+
+        # Clean stale factor workspace dirs (data/results/workspace/<uuid>/)
+        # Each dir holds a temporary result.h5 (~163 MB) created during factor
+        # evaluation. Once the result is cached the dir is no longer needed.
+        # We remove dirs older than 30 minutes to avoid deleting in-progress ones.
+        ws_removed, ws_freed = 0, 0
+        from quantaalpha.core.conf import RD_AGENT_SETTINGS as _rda
+        workspace_root = _rda.workspace_path
+        cutoff = 30 * 60  # seconds
+        now = __import__("time").time()
+        for ws_dir in workspace_root.iterdir():
+            if not ws_dir.is_dir():
+                continue
+            try:
+                age = now - ws_dir.stat().st_mtime
+                if age > cutoff:
+                    size = sum(f.stat().st_size for f in ws_dir.rglob("*") if f.is_file())
+                    shutil.rmtree(ws_dir, ignore_errors=True)
+                    ws_removed += 1
+                    ws_freed += size
+            except Exception:
+                pass
+        if ws_removed:
+            logger.info(f"Auto-cleanup: removed {ws_removed} stale workspace dirs "
+                        f"({ws_freed / 1024**3:.2f} GB freed)")
     except Exception as e:
         logger.warning(f"Auto-cleanup skipped: {e}")
 
@@ -616,6 +641,34 @@ def main(path=None, step_n=100, direction=None, stop_event=None, config_path=Non
     """
     if factor_lib_suffix:
         os.environ["FACTOR_LIBRARY_SUFFIX"] = factor_lib_suffix
+
+    # Background thread: clean stale workspace dirs every 30 min during the run
+    import threading as _threading
+    _ws_stop = _threading.Event()
+
+    def _periodic_workspace_cleanup():
+        import shutil, time as _time
+        from quantaalpha.core.conf import RD_AGENT_SETTINGS as _rda
+        while not _ws_stop.wait(timeout=30 * 60):
+            ws_root = _rda.workspace_path
+            now = _time.time()
+            removed = freed = 0
+            try:
+                for d in ws_root.iterdir():
+                    if d.is_dir() and now - d.stat().st_mtime > 30 * 60:
+                        size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+                        shutil.rmtree(d, ignore_errors=True)
+                        removed += 1
+                        freed += size
+                if removed:
+                    logger.info(f"Periodic workspace cleanup: {removed} dirs removed "
+                                f"({freed/1024**3:.2f} GB freed)")
+            except Exception:
+                pass
+
+    _ws_thread = _threading.Thread(target=_periodic_workspace_cleanup, daemon=True, name="ws-cleaner")
+    _ws_thread.start()
+
     try:
         from quantaalpha.core.conf import RD_AGENT_SETTINGS
         logger.info("="*60)
@@ -740,6 +793,7 @@ def main(path=None, step_n=100, direction=None, stop_event=None, config_path=Non
         raise
     finally:
         logger.info("Run finished or terminated")
+        _ws_stop.set()  # stop periodic workspace cleaner
         _cleanup_experiment_caches()
 
 if __name__ == "__main__":

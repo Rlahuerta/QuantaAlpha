@@ -492,7 +492,8 @@ class BacktestRunner:
         )
         
         logger.debug(f"  Custom factor mode: {len(feature_cols)} factors, {len(combined_df)} rows, train={dataset_config['segments']['train']}")
-        
+        self._feature_cols = feature_cols  # stash for feature importance mapping
+
         return dataset
     
     def _compute_label(self, label_expr: str) -> pd.DataFrame:
@@ -673,8 +674,12 @@ class BacktestRunner:
                     fi_gain = lgb_model.feature_importance(importance_type='gain')
                     fi_split = lgb_model.feature_importance(importance_type='split')
                     feat_names = lgb_model.feature_name()
+                    # Map Column_N → real factor name via stashed feature_cols
+                    feature_cols = getattr(self, '_feature_cols', [])
+                    col_map = {f"Column_{i}": name for i, name in enumerate(feature_cols)}
+                    real_names = [col_map.get(n, n) for n in feat_names]
                     fi_df = pd.DataFrame({
-                        'feature': feat_names,
+                        'feature': real_names,
                         'importance_gain': fi_gain,
                         'importance_split': fi_split,
                     }).sort_values('importance_gain', ascending=False)
@@ -682,6 +687,10 @@ class BacktestRunner:
                     _fi_out_dir.mkdir(parents=True, exist_ok=True)
                     fi_path = _fi_out_dir / f"{exp_name}_feature_importance.csv"
                     fi_df.to_csv(fi_path, index=False)
+                    # Also save the full column order for reference
+                    import json as _json
+                    col_order_path = _fi_out_dir / f"{exp_name}_feature_cols.json"
+                    col_order_path.write_text(_json.dumps(feature_cols, indent=2))
                     print(f"  Feature importance saved: {fi_path} ({len(fi_df)} features)")
                     top20 = fi_df.head(20)['feature'].tolist()
                     print(f"  Top-20 by gain: {top20}")
