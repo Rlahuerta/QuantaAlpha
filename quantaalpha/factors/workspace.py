@@ -107,7 +107,7 @@ class QlibFBWorkspace(_RdagentQlibFBWorkspace):
                     )
                     if patched != self.file_dict[key]:
                         self.file_dict[key] = patched
-                        logger.debug(f"Patched num_threads→{lgb_threads} in {key}")
+                        logger.info(f"Patched num_threads→{lgb_threads} in {key}")
 
     def execute(self, qlib_config_name: str = "conf.yaml", run_env: dict = {}, *args, **kwargs):
         """Execute qlib backtest using a conda-aware LocalEnv.
