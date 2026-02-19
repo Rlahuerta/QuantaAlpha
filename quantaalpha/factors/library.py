@@ -47,8 +47,12 @@ class FactorLibraryManager:
         }
 
     def _save(self):
+        factors = self.data["factors"]
         self.data["metadata"]["last_updated"] = datetime.now().isoformat()
-        self.data["metadata"]["total_factors"] = len(self.data["factors"])
+        self.data["metadata"]["total_factors"] = len(factors)
+        self.data["metadata"]["high_quality_count"] = sum(1 for f in factors.values() if f.get("quality") == "high_quality")
+        self.data["metadata"]["medium_quality_count"] = sum(1 for f in factors.values() if f.get("quality") == "medium_quality")
+        self.data["metadata"]["low_quality_count"] = sum(1 for f in factors.values() if f.get("quality") == "low_quality")
         self.library_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.library_path, "w", encoding="utf-8") as f:
             json.dump(self.data, f, ensure_ascii=False, indent=2, default=str)
@@ -116,6 +120,15 @@ class FactorLibraryManager:
                             f"result.h5 missing for {factor_name} ({h5_file}), will recompute from expression in backtest"
                         )
 
+            rank_ic = abs(backtest_results.get("Rank IC") or 0)
+            ic = abs(backtest_results.get("IC") or 0)
+            if rank_ic >= 0.02 or ic >= 0.02:
+                quality = "high_quality"
+            elif rank_ic >= 0.01 or ic >= 0.01:
+                quality = "medium_quality"
+            else:
+                quality = "low_quality"
+
             factor_entry = {
                 "factor_id": factor_id,
                 "factor_name": factor_name,
@@ -123,6 +136,7 @@ class FactorLibraryManager:
                 "factor_implementation_code": code,
                 "factor_description": factor_desc,
                 "factor_formulation": factor_form,
+                "quality": quality,
                 "cache_location": cache_location,
                 "metadata": {
                     "experiment_id": experiment_id,
