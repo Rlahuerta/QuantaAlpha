@@ -197,8 +197,10 @@ def _parallel_task_worker(
     try:
         from quantaalpha.core.conf import RD_AGENT_SETTINGS
         RD_AGENT_SETTINGS.use_file_lock = False
+        # Place worker cache alongside the main experiment cache, not inside log/
+        base_cache = Path(RD_AGENT_SETTINGS.pickle_cache_folder_path_str)
         RD_AGENT_SETTINGS.pickle_cache_folder_path_str = str(
-            Path(log_root) / f"pickle_cache_{task_idx}"
+            base_cache.parent / f"{base_cache.name}_w{task_idx}"
         )
 
         traj_data = _run_evolution_task(
