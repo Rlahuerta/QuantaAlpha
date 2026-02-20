@@ -1,0 +1,67 @@
+######################################################################
+# QuantaAlpha Live Trading Configuration
+# Strategy: US Equities, TopkDropout (topk=30, n_drop=2)
+# Optimal config backtest: ARR=76.0%, Calmar=4.94, MDD=-15.4%
+#   (test 2022-2025, excess vs SPY, multi-period label, topk=30, n_drop=2)
+######################################################################
+
+model:
+  # Saved LightGBM booster + feature list + training metadata
+  meta_path: "data/models/us_mp_t20d5_meta.json"
+
+data:
+  h5_path: "git_ignore_folder/factor_implementation_source_data_us/daily_pv.h5"
+  # Days of history loaded for factor computation (longest window = 252d)
+  lookback_days: 300
+
+portfolio:
+  topk: 30
+  n_drop: 2
+  capital: 1_000_000      # $1M paper capital
+  min_position_size: 1    # minimum shares per holding
+  max_position_pct: 0.05  # max single position = 5% of capital
+  min_adv: 5_000_000      # liquidity filter: ADV > $5M (0 = disabled)
+
+schedule:
+  timezone: "America/New_York"
+  ingest_time: "16:30"    # fetch EOD data after US market close
+  signal_time: "17:00"    # generate signals + write pending_orders_{date}.json
+  # IBKR executor reads orders at 09:25 next trading day (before open)
+
+ibkr:
+  host: "127.0.0.1"
+  port: 7497              # 7497 = paper trading, 7496 = live
+  client_id: 1
+  timeout: 30             # seconds to wait for TWS connection
+  dry_run: true           # true = log orders only, never submit to TWS
+  paper_mode: true        # switch to false + port 7496 for live capital
+
+risk:
+  daily_loss_limit_pct: 0.03    # kill-switch: halt if daily P&L < -3% of capital
+  max_drawdown_alert_pct: 0.08  # alert when MDD breaches 8%
+
+gate:
+  # Promotion criteria: paper → live capital
+  min_sharpe: 1.5         # annualised Sharpe ratio
+  max_mdd: 0.10           # maximum drawdown (10%)
+  min_days: 60            # minimum paper trading days
+
+alerting:
+  dry_run: true           # true = log only, no emails/Slack sent
+  subject_prefix: "[QuantaAlpha]"
+  email:
+    enabled: false
+    smtp_host: "smtp.gmail.com"
+    smtp_port: 587
+    smtp_user: ""
+    smtp_password: ""
+    from_addr: ""
+    to_addrs: []
+  slack:
+    enabled: false
+    webhook_url: ""
+
+output:
+  orders_dir: "data/live"
+  positions_file: "data/live/positions.json"
+  pnl_dir: "data/live/pnl"

@@ -250,7 +250,8 @@ class TestTargetShares:
 
     def setup_method(self):
         from quantaalpha.live.portfolio_constructor import PortfolioConstructor
-        self.pc = PortfolioConstructor(topk=4, n_drop=1, capital=100_000)
+        # max_position_pct=1.0 disables the cap so tests can verify raw equal-weight logic
+        self.pc = PortfolioConstructor(topk=4, n_drop=1, capital=100_000, max_position_pct=1.0)
 
     def test_shares_sum_near_capital(self):
         target = ["AAPL", "MSFT", "GOOG", "AMZN"]
