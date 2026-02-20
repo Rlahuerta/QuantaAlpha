@@ -63,13 +63,18 @@ class SignalGenerator:
 
     @classmethod
     def from_meta(cls, meta_path: str | Path, **kwargs) -> "SignalGenerator":
-        """Load a SignalGenerator from the metadata JSON saved by the runner."""
+        """Load a SignalGenerator from the metadata JSON saved by the runner.
+
+        ``kwargs`` override values read from the meta file (e.g. pass a different
+        ``h5_path`` to redirect to a local data store without editing the meta).
+        """
         meta = json.loads(Path(meta_path).read_text())
+        # kwargs take precedence over meta values so callers can override h5_path etc.
         return cls(
             booster_path=meta["booster_path"],
             feature_cols=meta["feature_cols"],
             factor_json_files=meta.get("factor_json", []),
-            h5_path=meta.get("data_file", ""),
+            h5_path=kwargs.pop("h5_path", meta.get("data_file", "")),
             **kwargs,
         )
 
@@ -99,14 +104,21 @@ class SignalGenerator:
         return full.loc[mask]
 
     def _load_factors(self) -> List[Dict]:
-        """Load factor definitions from all JSON files."""
-        factors = {}
+        """Load factor definitions from all JSON files.
+
+        Factor library JSON may use either human-readable names or hash keys.
+        When a ``factor_name`` field is present inside the entry, that is used
+        as the canonical name (matching what the model was trained on).
+        """
+        factors: Dict[str, dict] = {}
         for p in self.factor_json_files:
             if not p.exists():
                 log.warning("Factor JSON not found: %s", p)
                 continue
             lib = json.loads(p.read_text())
-            for name, info in lib.get("factors", {}).items():
+            for _key, info in lib.get("factors", {}).items():
+                # Prefer the factor_name field; fall back to the dict key
+                name = info.get("factor_name") or _key
                 if name not in factors:
                     factors[name] = info
         return [{"name": k, **v} for k, v in factors.items()]
@@ -163,18 +175,29 @@ class SignalGenerator:
         """Compute ranked trading signals for as_of_date.
 
         Args:
-            as_of_date: Date to generate signals for. Defaults to today.
+            as_of_date: Date to generate signals for.  Defaults to the latest
+                        date available in the H5 store (safe during off-market
+                        hours when today's data hasn't been ingested yet).
             min_valid_fraction: Drop instruments with fewer than this fraction
                                 of non-NaN factor values. Default 0.5.
 
         Returns:
             Dict mapping instrument → raw model score (higher = stronger buy).
         """
-        if as_of_date is None:
-            as_of_date = date.today()
-        as_of = pd.Timestamp(as_of_date)
-
         self._load_booster()
+
+        # Resolve as_of: use explicit date or fall back to latest H5 date
+        if as_of_date is None:
+            # Use a generous window to find the latest available date
+            tmp = self._load_h5_window(pd.Timestamp("today"))
+            if tmp.empty:
+                log.warning("H5 data is empty")
+                return {}
+            latest = tmp.index.get_level_values("datetime").max()
+            as_of = pd.Timestamp(latest)
+            log.info("as_of_date not specified — using latest H5 date: %s", as_of.date())
+        else:
+            as_of = pd.Timestamp(as_of_date)
 
         data_df = self._load_h5_window(as_of)
         if data_df.empty:
