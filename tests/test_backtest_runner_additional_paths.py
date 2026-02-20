@@ -471,3 +471,164 @@ def test_save_results_recovers_from_corrupted_summary(tmp_path):
     repaired = yaml.safe_load(summary_file.read_text(encoding="utf-8"))
     assert isinstance(repaired, list)
     assert repaired[-1]["name"] == "repair_case"
+
+
+def test_train_and_backtest_saves_model_files(tmp_path, fake_qlib_modules, monkeypatch):
+    """Model booster + feature_cols.json + meta.json saved when LGBModel.model.save_model exists."""
+    import json
+    import types
+    import numpy as np
+
+    model_save_dir = tmp_path / "models"
+    # Write config with model_save_dir
+    config = {
+        "data": {
+            "provider_uri": str(tmp_path / "qlib_data"),
+            "region": "us",
+            "start_time": "2021-01-01",
+            "end_time": "2021-01-31",
+            "market": "csi300",
+        },
+        "factor_source": {
+            "type": "custom",
+            "custom": {"json_files": ["lib.json"]},
+        },
+        "llm": {"cache_dir": str(tmp_path / "cache"), "auto_extract_cache": False},
+        "dataset": {
+            "label": "Ref($close,-2)/Ref($close,-1)-1",
+            "learn_processors": [],
+            "infer_processors": [],
+            "segments": {
+                "train": ["2021-01-01", "2021-01-10"],
+                "valid": ["2021-01-11", "2021-01-20"],
+                "test": ["2021-01-21", "2021-01-31"],
+            },
+        },
+        "model": {"type": "lgb", "params": {}},
+        "backtest": {
+            "strategy": {
+                "class": "TopkDropoutStrategy",
+                "module_path": "qlib.contrib.strategy.signal_strategy",
+                "kwargs": {"topk": 2, "n_drop": 1},
+            },
+            "backtest": {
+                "start_time": "2021-01-21", "end_time": "2021-01-31",
+                "account": 1_000_000, "benchmark": "SH000300",
+                "exchange_kwargs": {},
+            },
+        },
+        "experiment": {
+            "name": "exp",
+            "recorder": "rec",
+            "output_dir": str(tmp_path / "out"),
+            "output_metrics_file": "metrics.json",
+            "model_save_dir": str(model_save_dir),
+        },
+    }
+    import yaml as _yaml
+    cfg_path = tmp_path / "cfg_with_save.yaml"
+    cfg_path.write_text(_yaml.safe_dump(config))
+    runner = BacktestRunner(str(cfg_path))
+
+    # Keep the save_model calls side-effect-free; write a sentinel file
+    saved_paths = []
+
+    class FakeLGBBooster:
+        def save_model(self, path):
+            saved_paths.append(path)
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_text("fake_booster")
+
+        def feature_importance(self, importance_type="gain"):
+            return np.array([1.0, 2.0])
+
+        def feature_name(self):
+            return ["Column_0", "Column_1"]
+
+        best_iteration = 10
+
+    class FakeLGBModelWithBooster:
+        def __init__(self, **kwargs):
+            self.model = FakeLGBBooster()
+
+        def fit(self, dataset):
+            pass
+
+        def predict(self, dataset):
+            idx = pd.MultiIndex.from_product(
+                [pd.to_datetime(["2021-01-21", "2021-01-22"]), ["AAA", "BBB"]],
+                names=["datetime", "instrument"],
+            )
+            return pd.Series([0.1, 0.2, 0.3, 0.4], index=idx)
+
+    # Patch the LGBModel that the runner imports
+    gbdt_mod = sys.modules.get("qlib.contrib.model.gbdt")
+    assert gbdt_mod is not None, "fake qlib modules must be installed by fixture"
+    original_lgb = gbdt_mod.LGBModel
+    gbdt_mod.LGBModel = FakeLGBModelWithBooster
+
+    # Stash feature_cols for the column-name mapping
+    runner._feature_cols = ["momentum_5d", "volatility_10d"]
+
+    try:
+        metrics = runner._train_and_backtest(dataset=object(), exp_name="exp", rec_name="rec", output_name="my_run")
+    finally:
+        gbdt_mod.LGBModel = original_lgb  # restore
+
+    # Booster file was created
+    assert len(saved_paths) == 1
+    assert "my_run_lgbm.txt" in saved_paths[0]
+
+    # Feature cols JSON was written
+    fc_path = model_save_dir / "my_run_feature_cols.json"
+    assert fc_path.exists()
+    assert json.loads(fc_path.read_text()) == ["momentum_5d", "volatility_10d"]
+
+    # Metadata JSON was written
+    meta_path = model_save_dir / "my_run_meta.json"
+    assert meta_path.exists()
+    meta = json.loads(meta_path.read_text())
+    assert meta["model_stem"] == "my_run"
+    assert meta["num_features"] == 2
+    assert "momentum_5d" in meta["feature_cols"]
+
+
+def test_train_and_backtest_model_save_failure_does_not_crash(tmp_path, fake_qlib_modules, monkeypatch):
+    """If save_model raises, _train_and_backtest still returns metrics (no crash)."""
+    class FakeLGBBoosterBroken:
+        def save_model(self, path):
+            raise OSError("disk full")
+
+        def feature_importance(self, importance_type="gain"):
+            return []
+
+        def feature_name(self):
+            return []
+
+    class FakeLGBModelBroken:
+        def __init__(self, **kwargs):
+            self.model = FakeLGBBoosterBroken()
+
+        def fit(self, dataset):
+            pass
+
+        def predict(self, dataset):
+            idx = pd.MultiIndex.from_product(
+                [pd.to_datetime(["2021-01-21", "2021-01-22"]), ["AAA", "BBB"]],
+                names=["datetime", "instrument"],
+            )
+            return pd.Series([0.1, 0.2, 0.3, 0.4], index=idx)
+
+    gbdt_mod = sys.modules.get("qlib.contrib.model.gbdt")
+    original_lgb = gbdt_mod.LGBModel
+    gbdt_mod.LGBModel = FakeLGBModelBroken
+    config_path = _write_runner_config(tmp_path)
+    runner = BacktestRunner(str(config_path))
+    runner._feature_cols = []
+
+    try:
+        metrics = runner._train_and_backtest(dataset=object(), exp_name="exp", rec_name="rec", output_name="run_save_fail")
+    finally:
+        gbdt_mod.LGBModel = original_lgb
+
+    assert isinstance(metrics, dict)

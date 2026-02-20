@@ -162,11 +162,28 @@ class BacktestRunner:
         if cache_dir:
             cache_dir = Path(cache_dir)
         auto_extract = llm_config.get('auto_extract_cache', True)
+
+        # Load data_df from file if factor_calculation.data_file is specified (e.g. US H5).
+        # This bypasses the Qlib D.features() call for non-CN markets.
+        data_df = None
+        fc_config = self.config.get('factor_calculation', {}) or {}
+        data_file = fc_config.get('data_file')
+        if data_file:
+            data_path = Path(data_file)
+            if not data_path.is_absolute():
+                data_path = (Path(__file__).resolve().parents[2] / data_path).resolve()
+            if data_path.exists():
+                print(f"  Loading stock data from {data_path.name}...")
+                data_df = pd.read_hdf(str(data_path), key='data')
+                logger.info(f"Loaded data_file: {data_path} ({len(data_df):,} rows)")
+            else:
+                logger.warning(f"factor_calculation.data_file not found: {data_path}")
+
         calculator = CustomFactorCalculator(
-            data_df=None,
+            data_df=data_df,
             cache_dir=cache_dir,
             auto_extract_cache=auto_extract,
-            config=self.config,
+            config=self.config,  # Always pass config for market/cache/region settings
         )
         result_df = calculator.calculate_factors_batch(factors, use_cache=True, skip_compute=skip_compute)
         if result_df is None:
@@ -556,7 +573,10 @@ class BacktestRunner:
 
         px = prices[["datetime", "symbol", "open"]].copy()
         px = px.sort_values(["symbol", "datetime"])
-        px["next_ret"] = px.groupby("symbol")["open"].shift(-1) / px["open"] - 1
+        # Return from open(t+1) to open(t+2): signal at close(t) executes at open(t+1),
+        # is exited at open(t+2). Using shift(-1)/shift(-2) avoids 1-day look-ahead.
+        grp = px.groupby("symbol")["open"]
+        px["next_ret"] = grp.shift(-2) / grp.shift(-1) - 1
         merged = pred_df.merge(px[["datetime", "symbol", "next_ret"]], on=["datetime", "symbol"], how="left")
         merged = merged.dropna(subset=["next_ret", "score"])
         if merged.empty:
@@ -696,6 +716,43 @@ class BacktestRunner:
                     print(f"  Top-20 by gain: {top20}")
             except Exception as fi_err:
                 logger.debug(f"Feature importance save failed: {fi_err}")
+
+            # Save trained model for inference (Phase 2: live signal generation).
+            # Saves: {model_save_path}.txt (LightGBM portable), feature_cols.json, metadata.json
+            try:
+                final_model = model_ext if (model_config.get('extended_training', False) and
+                                            'model_ext' in dir()) else model
+                lgb_booster = getattr(final_model, 'model', None)
+                if lgb_booster is not None and hasattr(lgb_booster, 'save_model'):
+                    exp_out_dir = Path(self.config['experiment'].get('output_dir', './backtest_v2_results'))
+                    model_dir = Path(self.config['experiment'].get('model_save_dir', 'data/models'))
+                    if not model_dir.is_absolute():
+                        model_dir = (Path(__file__).resolve().parents[2] / model_dir).resolve()
+                    model_dir.mkdir(parents=True, exist_ok=True)
+
+                    model_stem = output_name or exp_name
+                    booster_path = model_dir / f"{model_stem}_lgbm.txt"
+                    lgb_booster.save_model(str(booster_path))
+
+                    feature_cols = getattr(self, '_feature_cols', [])
+                    fc_path = model_dir / f"{model_stem}_feature_cols.json"
+                    import json as _json2
+                    fc_path.write_text(_json2.dumps(feature_cols, indent=2))
+
+                    meta = {
+                        "model_stem": model_stem,
+                        "feature_cols": feature_cols,
+                        "num_features": len(feature_cols),
+                        "train_segments": self.config['dataset'].get('segments', {}),
+                        "data_file": (self.config.get('factor_calculation', {}) or {}).get('data_file'),
+                        "factor_json": self.config['factor_source']['custom'].get('json_files', []),
+                        "booster_path": str(booster_path),
+                    }
+                    meta_path = model_dir / f"{model_stem}_meta.json"
+                    meta_path.write_text(_json2.dumps(meta, indent=2))
+                    print(f"  Model saved: {booster_path} ({len(feature_cols)} features)")
+            except Exception as model_save_err:
+                logger.warning(f"Model save failed: {model_save_err}")
 
             # Two-stage training: retrain on train+val with best num_boost_round.
             # Adds ~20% more training data (the held-out validation year) before predicting test.

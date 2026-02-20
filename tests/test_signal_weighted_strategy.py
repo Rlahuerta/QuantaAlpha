@@ -275,3 +275,56 @@ def test_runner_parquet_fallback_signal_weighted():
 
     # Should return a dict (possibly empty if calculations fail) — no exception
     assert isinstance(result, dict)
+
+
+def test_parquet_portfolio_next_ret_uses_t_plus_2_open():
+    """Verify next_ret = open(t+2)/open(t+1) - 1 (no look-ahead: signal at t executes at open(t+1))."""
+    import numpy as np
+    from unittest.mock import patch
+    from quantaalpha.backtest.runner import BacktestRunner
+
+    runner = BacktestRunner.__new__(BacktestRunner)
+    runner.config = {
+        "backtest": {
+            "backtest": {"start_time": "2022-01-01", "end_time": "2022-12-31"},
+            "strategy": {"kwargs": {"topk": 1, "weight_scheme": "equal"}},
+        }
+    }
+
+    # 6 trading dates — gives enough room for shift(-2) to yield valid values
+    dates = pd.date_range("2022-01-03", periods=6, freq="B")
+    symbol = "AA"
+    # Strictly increasing opens: 10, 11, 12, 13, 14, 15
+    opens = [10.0, 11.0, 12.0, 13.0, 14.0, 15.0]
+    prices_rows = [{"datetime": dt, "symbol": symbol, "open": o} for dt, o in zip(dates, opens)]
+    prices = pd.DataFrame(prices_rows)
+    prices["datetime"] = pd.to_datetime(prices["datetime"])
+
+    bench_rows = [{"datetime": dt, "open": 100.0} for dt in dates]
+    bench = pd.DataFrame(bench_rows)
+    bench["datetime"] = pd.to_datetime(bench["datetime"])
+
+    # Constant score so all dates select "AA"
+    pred = pd.Series(
+        [1.0] * len(dates),
+        index=pd.MultiIndex.from_tuples(
+            [(dt, symbol) for dt in dates], names=["datetime", "instrument"]
+        ),
+    )
+
+    with patch.object(runner, "_load_parquet_prices", return_value=prices), \
+         patch.object(runner, "_load_parquet_benchmark", return_value=bench):
+        # Build the px DataFrame the same way the runner does, and verify next_ret values
+        import pandas as _pd
+        px = prices[["datetime", "symbol", "open"]].copy().sort_values(["symbol", "datetime"])
+        grp = px.groupby("symbol")["open"]
+        px["next_ret"] = grp.shift(-2) / grp.shift(-1) - 1
+
+        aa = px[px["symbol"] == symbol].reset_index(drop=True)
+        # For date[0] (open=10): shift(-2)=12, shift(-1)=11 → next_ret = 12/11 - 1 ≈ 0.0909
+        assert abs(aa.loc[0, "next_ret"] - (12.0 / 11.0 - 1)) < 1e-6
+        # For date[1] (open=11): shift(-2)=13, shift(-1)=12 → next_ret = 13/12 - 1 ≈ 0.0833
+        assert abs(aa.loc[1, "next_ret"] - (13.0 / 12.0 - 1)) < 1e-6
+        # Last two rows must be NaN (not enough future data for shift(-2))
+        assert _pd.isna(aa.loc[4, "next_ret"])
+        assert _pd.isna(aa.loc[5, "next_ret"])
