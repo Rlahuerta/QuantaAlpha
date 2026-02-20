@@ -55,10 +55,11 @@ data:
 ######################################################################
 
 dataset:
-  # 1-day forward return: Ref($close,-2)/Ref($close,-1)-1
-  # Note: when parquet_bundle_dir is set the runner computes labels directly
-  # from the parquet prices; this expression is kept for documentation only.
-  label: "Ref($close, -2) / Ref($close, -1) - 1"
+  # Multi-period label: 50% 1-day + 30% 5-day + 20% 20-day forward return.
+  # Blending horizons reduces label noise while preserving short-term alpha.
+  # When parquet_bundle_dir is set, _compute_label() parses this expression
+  # directly from the Ref($close,-N) terms — no Qlib D.features() call needed.
+  label: "(Ref($close, -2) / Ref($close, -1) - 1) * 0.5 + (Ref($close, -6) / Ref($close, -1) - 1) * 0.3 + (Ref($close, -21) / Ref($close, -1) - 1) * 0.2"
 
   learn_processors:
     - class: "Fillna"

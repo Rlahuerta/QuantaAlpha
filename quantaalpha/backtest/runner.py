@@ -513,16 +513,63 @@ class BacktestRunner:
 
         return dataset
     
+    @staticmethod
+    def _parse_label_expr(label_expr: str) -> Optional[list]:
+        """Parse a Qlib label expression into weighted (shift_n, shift_m, weight) terms.
+
+        Recognises two forms:
+          ``Ref($close, -N) / Ref($close, -M) - 1``          (weight 1.0)
+          ``(Ref($close, -N) / Ref($close, -M) - 1) * W``    (weight W)
+
+        Returns a list of (n, m, w) tuples or None if the expression cannot be parsed.
+        """
+        import re
+        # Pattern: optional leading '(' ... ')' and optional '* weight'
+        term_re = re.compile(
+            r"\(?Ref\(\s*\$close\s*,\s*-(\d+)\s*\)\s*/\s*Ref\(\s*\$close\s*,\s*-(\d+)\s*\)\s*-\s*1\)?"
+            r"(?:\s*\*\s*([\d.]+))?",
+            re.IGNORECASE,
+        )
+        terms = []
+        for m in term_re.finditer(label_expr):
+            n, k = int(m.group(1)), int(m.group(2))
+            w = float(m.group(3)) if m.group(3) else None
+            terms.append((n, k, w))
+        if not terms:
+            return None
+        # If any weight is None, treat as single-term with weight 1.0
+        if len(terms) == 1 and terms[0][2] is None:
+            return [(terms[0][0], terms[0][1], 1.0)]
+        # Multi-term: all weights must be explicit
+        if any(t[2] is None for t in terms):
+            return None
+        return terms
+
     def _compute_label(self, label_expr: str) -> pd.DataFrame:
-        """Compute label using Qlib (label requires look-ahead)."""
+        """Compute label; uses parquet close prices when available, else Qlib D.features()."""
         parquet_prices = self._load_parquet_prices()
         if parquet_prices is not None and {"datetime", "symbol", "close"}.issubset(parquet_prices.columns):
             df = parquet_prices[["datetime", "symbol", "close"]].copy()
             df = df.sort_values(["symbol", "datetime"])
-            # Match label: Ref($close, -2) / Ref($close, -1) - 1
-            close_t1 = df.groupby("symbol")["close"].shift(-1)
-            close_t2 = df.groupby("symbol")["close"].shift(-2)
-            label = (close_t2 / close_t1) - 1
+
+            terms = self._parse_label_expr(label_expr)
+            if terms is None:
+                # Fallback: hardcoded 1-day forward return
+                logger.warning(f"  Could not parse label expr, using 1d return: {label_expr!r}")
+                terms = [(2, 1, 1.0)]
+
+            close_grp = df.groupby("symbol")["close"]
+            # Pre-compute all unique shifts needed
+            shifts: dict = {}
+            for n, k, _ in terms:
+                for s in (n, k):
+                    if s not in shifts:
+                        shifts[s] = close_grp.shift(-s)
+
+            label = sum(
+                (shifts[n] / shifts[k] - 1) * w
+                for n, k, w in terms
+            )
             out = pd.DataFrame(
                 {"LABEL0": label.values},
                 index=pd.MultiIndex.from_arrays(
@@ -530,7 +577,8 @@ class BacktestRunner:
                     names=["instrument", "datetime"],
                 ),
             )
-            logger.debug(f"  Label rows from parquet: {len(out)}")
+            n_terms = len(terms)
+            logger.debug(f"  Label from parquet ({n_terms} term(s)): {len(out)} rows")
             return out
 
         from qlib.data import D

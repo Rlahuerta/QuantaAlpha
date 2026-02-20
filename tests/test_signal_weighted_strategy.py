@@ -389,3 +389,144 @@ def test_parquet_portfolio_topkdropout_ndrop_differentiates():
         f"n_drop=1 and n_drop=5 returned identical ARR={m1['annualized_return']:.6f}; "
         "n_drop must affect results"
     )
+
+
+# ---------------------------------------------------------------------------
+# _parse_label_expr tests
+# ---------------------------------------------------------------------------
+
+def test_parse_label_expr_single_term():
+    """Single-term 1-day label parses to one entry with weight 1.0."""
+    from quantaalpha.backtest.runner import BacktestRunner
+    result = BacktestRunner._parse_label_expr("Ref($close, -2) / Ref($close, -1) - 1")
+    assert result == [(2, 1, 1.0)]
+
+
+def test_parse_label_expr_multi_period():
+    """Multi-period blended label parses to three weighted entries."""
+    from quantaalpha.backtest.runner import BacktestRunner
+    expr = (
+        "(Ref($close, -2) / Ref($close, -1) - 1) * 0.5 + "
+        "(Ref($close, -6) / Ref($close, -1) - 1) * 0.3 + "
+        "(Ref($close, -21) / Ref($close, -1) - 1) * 0.2"
+    )
+    result = BacktestRunner._parse_label_expr(expr)
+    assert result is not None
+    assert len(result) == 3
+    ns = [t[0] for t in result]
+    ws = [t[2] for t in result]
+    assert ns == [2, 6, 21]
+    assert abs(sum(ws) - 1.0) < 1e-6
+
+
+def test_parse_label_expr_unknown_returns_none():
+    """Unrecognised expression returns None (triggers fallback)."""
+    from quantaalpha.backtest.runner import BacktestRunner
+    assert BacktestRunner._parse_label_expr("$close / $open - 1") is None
+    assert BacktestRunner._parse_label_expr("") is None
+
+
+def test_compute_label_parquet_single_term():
+    """Parquet label path with 1-day expression matches shift(-2)/shift(-1)-1."""
+    import numpy as np
+    from unittest.mock import patch
+    from quantaalpha.backtest.runner import BacktestRunner
+
+    runner = BacktestRunner.__new__(BacktestRunner)
+    runner.config = {"data": {"parquet_bundle_dir": "x"}}
+    runner._parquet_prices_cache = None
+    runner._parquet_benchmark_cache = None
+
+    dates = pd.date_range("2022-01-03", periods=5, freq="B")
+    closes = [100.0, 102.0, 101.0, 103.0, 105.0]
+    prices = pd.DataFrame([
+        {"datetime": dt, "symbol": "AA", "open": c, "close": c}
+        for dt, c in zip(dates, closes)
+    ])
+    prices["datetime"] = pd.to_datetime(prices["datetime"])
+
+    with patch.object(runner, "_load_parquet_prices", return_value=prices):
+        out = runner._compute_label("Ref($close, -2) / Ref($close, -1) - 1")
+
+    assert "LABEL0" in out.columns
+    aa = out.xs("AA", level="instrument")
+    # date[0]: close_t2=101, close_t1=102 → 101/102-1 ≈ -0.0098
+    expected_0 = closes[2] / closes[1] - 1
+    assert abs(aa.iloc[0]["LABEL0"] - expected_0) < 1e-6
+
+
+def test_compute_label_parquet_multi_period():
+    """Multi-period label is a weighted sum of 3 forward returns from parquet."""
+    import numpy as np
+    from unittest.mock import patch
+    from quantaalpha.backtest.runner import BacktestRunner
+
+    runner = BacktestRunner.__new__(BacktestRunner)
+    runner.config = {"data": {"parquet_bundle_dir": "x"}}
+    runner._parquet_prices_cache = None
+    runner._parquet_benchmark_cache = None
+
+    # 25 trading days, linearly increasing closes
+    dates = pd.date_range("2022-01-03", periods=25, freq="B")
+    closes = [100.0 + i for i in range(25)]
+    prices = pd.DataFrame([
+        {"datetime": dt, "symbol": "AA", "open": c, "close": c}
+        for dt, c in zip(dates, closes)
+    ])
+    prices["datetime"] = pd.to_datetime(prices["datetime"])
+
+    expr = (
+        "(Ref($close, -2) / Ref($close, -1) - 1) * 0.5 + "
+        "(Ref($close, -6) / Ref($close, -1) - 1) * 0.3 + "
+        "(Ref($close, -21) / Ref($close, -1) - 1) * 0.2"
+    )
+
+    with patch.object(runner, "_load_parquet_prices", return_value=prices):
+        out = runner._compute_label(expr)
+
+    assert "LABEL0" in out.columns
+    aa = out.xs("AA", level="instrument").reset_index()
+    # Row 0: c[-1]=c[1]=101, c[-2]=c[2]=102, c[-6]=c[6]=106, c[-21]=c[21]=121
+    # expected = (102/101-1)*0.5 + (106/101-1)*0.3 + (121/101-1)*0.2
+    c = closes
+    expected = (c[2]/c[1]-1)*0.5 + (c[6]/c[1]-1)*0.3 + (c[21]/c[1]-1)*0.2
+    assert abs(aa.iloc[0]["LABEL0"] - expected) < 1e-6, (
+        f"Multi-period label mismatch: got {aa.iloc[0]['LABEL0']:.8f}, expected {expected:.8f}"
+    )
+
+
+def test_compute_label_multi_differs_from_single():
+    """Multi-period label produces different values than 1-day label."""
+    from unittest.mock import patch
+    from quantaalpha.backtest.runner import BacktestRunner
+
+    runner = BacktestRunner.__new__(BacktestRunner)
+    runner.config = {"data": {"parquet_bundle_dir": "x"}}
+    runner._parquet_prices_cache = None
+    runner._parquet_benchmark_cache = None
+
+    dates = pd.date_range("2022-01-03", periods=25, freq="B")
+    # Non-uniform closes so 1-day and multi-period labels differ
+    import numpy as np
+    rng = np.random.default_rng(0)
+    closes = (100 + np.cumsum(rng.normal(0, 1, 25))).tolist()
+    prices = pd.DataFrame([
+        {"datetime": dt, "symbol": "AA", "open": c, "close": c}
+        for dt, c in zip(dates, closes)
+    ])
+    prices["datetime"] = pd.to_datetime(prices["datetime"])
+
+    single_expr = "Ref($close, -2) / Ref($close, -1) - 1"
+    multi_expr = (
+        "(Ref($close, -2) / Ref($close, -1) - 1) * 0.5 + "
+        "(Ref($close, -6) / Ref($close, -1) - 1) * 0.3 + "
+        "(Ref($close, -21) / Ref($close, -1) - 1) * 0.2"
+    )
+
+    with patch.object(runner, "_load_parquet_prices", return_value=prices):
+        single = runner._compute_label(single_expr)
+        multi = runner._compute_label(multi_expr)
+
+    common = single.index.intersection(multi.index)
+    diff = (single.loc[common, "LABEL0"] - multi.loc[common, "LABEL0"]).abs().max()
+    assert diff > 1e-6, "Multi-period and 1-day labels should differ"
