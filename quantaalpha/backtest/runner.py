@@ -584,26 +584,73 @@ class BacktestRunner:
 
         kwargs = strategy_config.get("kwargs", {})
         topk = int(kwargs.get("topk", 50))
+        n_drop = int(kwargs.get("n_drop", 5))
         weight_scheme = kwargs.get("weight_scheme", "equal")
+        # Cost per trade (one-way, expressed as fraction of trade value)
+        exchange_kwargs = (self.config.get("backtest", {}) or {}).get("backtest", {}).get("exchange_kwargs", {})
+        open_cost = float(exchange_kwargs.get("open_cost", 0.001))
+        close_cost = float(exchange_kwargs.get("close_cost", 0.001))
+        trade_cost = open_cost + close_cost  # round-trip cost per stock replaced
 
-        def _daily_ret(g: pd.DataFrame) -> float:
-            top = g.nlargest(topk, "score")
+        def _weights(sub: pd.DataFrame) -> pd.Series:
+            """Compute portfolio weights for the selected sub-DataFrame."""
             if weight_scheme == "linear_rank":
-                ranks = top["score"].rank(ascending=True, method="average")
-                w = ranks / ranks.sum()
-            elif weight_scheme == "softmax":
-                arr = top["score"].values.astype(float)
-                arr -= arr.max()
+                ranks = sub["score"].rank(ascending=True, method="average")
+                return ranks / ranks.sum()
+            if weight_scheme == "softmax":
+                arr = sub["score"].values.astype(float) - sub["score"].max()
                 exp_w = np.exp(arr)
-                w = pd.Series(exp_w / exp_w.sum(), index=top.index)
-            elif weight_scheme == "score":
-                shifted = top["score"] - top["score"].min() + 1e-8
-                w = shifted / shifted.sum()
-            else:
-                w = pd.Series(np.ones(len(top)) / len(top), index=top.index)
-            return float((top["next_ret"] * w).sum())
+                return pd.Series(exp_w / exp_w.sum(), index=sub.index)
+            if weight_scheme == "score":
+                shifted = sub["score"] - sub["score"].min() + 1e-8
+                return shifted / shifted.sum()
+            return pd.Series(np.ones(len(sub)) / len(sub), index=sub.index)
 
-        strat_ret = merged.groupby("datetime", sort=True).apply(_daily_ret, include_groups=False)
+        # --- TopkDropout simulation (stateful over dates) ---
+        dates = sorted(merged["datetime"].unique())
+        holdings: set = set()  # current portfolio symbols
+        daily_rets = {}
+        for dt in dates:
+            day = merged[merged["datetime"] == dt].copy()
+            if day.empty:
+                continue
+            day = day.set_index("symbol")
+            ranked = day["score"].sort_values(ascending=False)
+            candidates = list(ranked.index)  # all symbols ranked by score
+
+            prev_holdings = set(holdings)
+            if not holdings:
+                # Bootstrap: simply take top-K
+                holdings = set(candidates[:topk])
+            else:
+                # 1. Find holdings that have fallen out of the visible candidates
+                outside = [s for s in holdings if s not in day.index]
+                # 2. Holdings still visible, ranked from worst (end) to best among holdings
+                held_ranked = [s for s in candidates if s in holdings]
+                # 3. Drop at most n_drop worst-ranked holdings
+                held_sorted_worst_first = list(reversed(held_ranked)) + outside
+                to_drop = set(held_sorted_worst_first[:n_drop])
+                holdings -= to_drop
+                # 4. Fill vacancies with highest-ranked non-holdings
+                vacancies = topk - len(holdings)
+                for sym in candidates:
+                    if vacancies <= 0:
+                        break
+                    if sym not in holdings:
+                        holdings.add(sym)
+                        vacancies -= 1
+
+            portfolio = day.loc[[s for s in holdings if s in day.index]]
+            if portfolio.empty:
+                continue
+            w = _weights(portfolio)
+            gross_ret = float((portfolio["next_ret"] * w).sum())
+            # Cost: stocks newly entered (not in prev_holdings) pay round-trip cost
+            n_new = sum(1 for s in portfolio.index if s not in prev_holdings)
+            turnover = n_new / topk if topk > 0 else 0.0
+            daily_rets[dt] = gross_ret - turnover * trade_cost
+
+        strat_ret = pd.Series(daily_rets).sort_index()
 
         b = bench[["datetime", "open"]].copy().sort_values("datetime")
         b["bench_ret"] = b["open"].shift(-1) / b["open"] - 1
