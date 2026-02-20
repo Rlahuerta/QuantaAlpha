@@ -227,3 +227,81 @@ export function connectMiningWs(
 
   return ws;
 }
+
+// ========================== Live Trading API ==========================
+
+export interface LiveStatus {
+  config_found: boolean;
+  last_signal_date: string | null;
+  positions_file_exists: boolean;
+  pnl_snapshots: number;
+  orders_files: number;
+  ibkr_connected: boolean;
+  dry_run: boolean;
+}
+
+export interface LivePositions {
+  positions: Record<string, number>;
+  as_of: string | null;
+  capital: number | null;
+  num_positions: number;
+}
+
+export interface PnlSnapshot {
+  date: string;
+  daily_pnl: number;
+  cumulative_pnl: number;
+  portfolio_value?: number;
+  positions?: Record<string, number>;
+}
+
+export interface PnlHistory {
+  history: PnlSnapshot[];
+  summary: { total_pnl: number; last_date: string | null; num_days: number };
+}
+
+export interface LiveOrder {
+  ticker: string;
+  shares: number;
+  action: string;
+  price: number | null;
+  reason: string;
+}
+
+export interface LiveSignal {
+  date: string | null;
+  as_of: string | null;
+  scores_count: number;
+  orders: LiveOrder[];
+  target_positions?: Record<string, number>;
+}
+
+export async function getLiveStatus() {
+  return request<LiveStatus>('/api/v1/live/status');
+}
+
+export async function getLivePositions() {
+  return request<LivePositions>('/api/v1/live/positions');
+}
+
+export async function getLivePnl(limit = 90) {
+  return request<PnlHistory>(`/api/v1/live/pnl?limit=${limit}`);
+}
+
+export async function getLiveSignal() {
+  return request<LiveSignal>('/api/v1/live/signal');
+}
+
+export function connectLiveStream(
+  onMessage: (data: any) => void,
+  onClose?: () => void,
+): WebSocket {
+  const wsBase = window.location.host;
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${protocol}//${wsBase}/ws/live/stream`);
+  ws.onmessage = (e) => {
+    try { onMessage(JSON.parse(e.data)); } catch { /* ignore */ }
+  };
+  ws.onclose = () => onClose?.();
+  return ws;
+}

@@ -24,6 +24,8 @@ from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnec
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from live_routes import router as live_router, live_stream_ws
+
 # ---------------------------------------------------------------------------
 # Resolve project root (two levels up from this file: frontend-v2/backend/)
 # ---------------------------------------------------------------------------
@@ -551,6 +553,9 @@ async def _run_mining(task_id: str, req: MiningStartRequest):
 
 
 # ========================== API Endpoints ==========================
+
+app.include_router(live_router)
+app.add_websocket_route("/ws/live/stream", live_stream_ws)
 
 @app.get("/")
 async def root():
