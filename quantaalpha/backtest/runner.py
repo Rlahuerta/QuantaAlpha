@@ -728,7 +728,25 @@ class BacktestRunner:
                 except Exception as ext_err:
                     logger.warning(f"Extended training failed, using base model: {ext_err}")
             logger.debug(f"  Pred shape: {pred.shape}")
-            
+
+            # Weekly rebalancing: forward-fill signal so it only changes on rebalance days.
+            # TopkDropoutStrategy sees constant signal between rebalances → no turnover.
+            rebalance_freq = strategy_config.get('rebalance_freq', 1)
+            if rebalance_freq > 1 and isinstance(pred, pd.Series):
+                try:
+                    pred_wide = pred.unstack('instrument')
+                    # Keep only the signal value from every Nth trading day
+                    dates = pred_wide.index
+                    rebalance_mask = pd.Series(False, index=dates)
+                    rebalance_mask.iloc[::rebalance_freq] = True
+                    pred_resampled = pred_wide.where(rebalance_mask, other=np.nan)
+                    pred_resampled = pred_resampled.ffill()
+                    pred = pred_resampled.stack('instrument').reorder_levels(pred.index.names)
+                    pred = pred.sort_index()
+                    logger.info(f"  Weekly rebalancing: rebalance_freq={rebalance_freq} days applied")
+                except Exception as rf_err:
+                    logger.warning(f"  rebalance_freq forward-fill failed, using daily: {rf_err}")
+
             # Save prediction
             sr = SignalRecord(recorder=R.get_recorder(), model=model, dataset=dataset)
             sr.generate()

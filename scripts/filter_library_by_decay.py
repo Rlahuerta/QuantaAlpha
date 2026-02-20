@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -179,20 +180,56 @@ def main() -> None:
     gc.collect()
     print(f"Forward-return matrices ready (horizons={horizons}).", flush=True)
 
+    # MD5-pkl cache dir: fall back when H5 workspace files are missing
+    _pkl_cache_dir = Path(os.environ.get("FACTOR_CACHE_DIR", "data/results/factor_cache"))
+
+    def _load_factor_wide_from_pkl(factor_expr: str) -> "pd.DataFrame | None":
+        """Load factor series from MD5-keyed pkl cache and reshape to wide (date × instrument)."""
+        import hashlib, pickle
+        cache_key = hashlib.md5(factor_expr.encode()).hexdigest()
+        cache_file = _pkl_cache_dir / f"{cache_key}.pkl"
+        if not cache_file.exists():
+            return None
+        try:
+            with open(cache_file, "rb") as fh:
+                series = pickle.load(fh)
+            if not isinstance(series, pd.Series):
+                return None
+            # Normalise index to (datetime, instrument)
+            if series.index.names == ["instrument", "datetime"]:
+                series.index = series.index.swaplevel("instrument", "datetime")
+            series.index.names = ["datetime", "instrument"]
+            wide = series.unstack("instrument")
+            if instruments_filter:
+                cols = [c for c in wide.columns if str(c).upper() in instruments_filter]
+                wide = wide[cols]
+            # Apply date range filter
+            if _date_range:
+                wide = wide.loc[_date_range[0]:_date_range[1]]
+            return wide if not wide.empty else None
+        except Exception as e:
+            print(f"  [warn] pkl cache load failed [{cache_key}]: {e}", flush=True)
+            return None
+
     # Stream factors one by one — peak RAM = fwd_rets + one factor at a time
     no_cache_ids: list[str] = []
     all_metrics: dict[str, dict] = {}
 
     for i, (fid, finfo) in enumerate(factors.items(), 1):
         fname = finfo.get("factor_name", fid)
+        factor_expr = finfo.get("factor_expression", "")
         result_h5 = finfo.get("cache_location", {}).get("result_h5_path")
-        if not result_h5 or not Path(result_h5).exists():
+        factor_wide = None
+        if result_h5 and Path(result_h5).exists():
+            factor_wide = _load_factor_wide_from_h5(
+                result_h5, date_range=_date_range, instruments=instruments_filter
+            )
+        if factor_wide is None and factor_expr:
+            factor_wide = _load_factor_wide_from_pkl(factor_expr)
+        if factor_wide is None:
             no_cache_ids.append(fid)
             print(f"  [{i}/{total}] SKIP {fname}: no cached values", flush=True)
             continue
-        factor_wide = _load_factor_wide_from_h5(
-            result_h5, date_range=_date_range, instruments=instruments_filter
-        )
         if factor_wide is None:
             no_cache_ids.append(fid)
             print(f"  [{i}/{total}] SKIP {fname}: load failed", flush=True)
