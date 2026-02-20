@@ -23,6 +23,8 @@ dependencies:
       - uvicorn
       - websockets
       - python-multipart
+      - yfinance
+      - lxml
 
 variables:
   CONDA_ENV_NAME: quantaalpha-ollama

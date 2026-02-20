@@ -56,4 +56,7 @@ setuptools-scm             # Dynamic version from SCM
 # -----------------------------------------------------------------------------
 rdagent==0.8.0             # RD-Agent framework (pinned for compatibility)
 
+# Live trading data pipeline
+yfinance                   # US market data (EOD OHLCV for live trading pipeline)
+lxml                       # HTML parsing for yfinance / Wikipedia ticker scraping
 pyqlib                     # Qlib quantitative research framework
