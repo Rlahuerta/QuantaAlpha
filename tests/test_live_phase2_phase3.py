@@ -165,7 +165,7 @@ class TestTradingSchedulerRunSignal:
         mock_constructor = MagicMock()
         result = MagicMock()
         result.orders = []
-        result.target_positions = {"AAPL": 100}
+        result.target_portfolio = {"AAPL": 100}
         mock_constructor.rebalance.return_value = result
         with patch.object(sched_mod, "SignalGenerator") as MockSG, \
              patch.object(sched_mod, "PortfolioConstructor", return_value=mock_constructor):
@@ -194,7 +194,7 @@ class TestTradingSchedulerRunSignal:
         mock_constructor = MagicMock()
         rebalance_result = MagicMock()
         rebalance_result.orders = []
-        rebalance_result.target_positions = {}
+        rebalance_result.target_portfolio = {}
         mock_constructor.rebalance.return_value = rebalance_result
         with patch.object(sched_mod, "SignalGenerator") as MockSG, \
              patch.object(sched_mod, "PortfolioConstructor", return_value=mock_constructor):
@@ -215,7 +215,7 @@ class TestTradingSchedulerRunSignal:
         mock_constructor = MagicMock()
         def capture_rebalance(**kwargs):
             captured.update(kwargs)
-            r = MagicMock(); r.orders = []; r.target_positions = {}
+            r = MagicMock(); r.orders = []; r.target_portfolio = {}
             return r
         mock_constructor.rebalance.side_effect = capture_rebalance
         with patch.object(sched_mod, "SignalGenerator") as MockSG, \

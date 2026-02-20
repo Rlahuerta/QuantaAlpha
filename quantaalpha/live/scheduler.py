@@ -67,34 +67,37 @@ class TradingScheduler:
             except Exception as exc:  # pragma: no cover
                 logger.warning("Could not load positions file: %s", exc)
 
-        # 2. Generate scores
-        sg = SignalGenerator.from_meta(model_cfg["meta_path"])
-        as_of = datetime.now()
-        scores: Dict[str, float] = sg.generate(as_of_date=as_of)
+        # 2. Generate scores — pass None so generate() picks latest H5 date
+        h5_path = self.config.get("data", {}).get("h5_path")
+        sg = SignalGenerator.from_meta(
+            model_cfg["meta_path"],
+            **({"h5_path": h5_path} if h5_path else {}),
+        )
+        scores: Dict[str, float] = sg.generate(as_of_date=None)
         if not scores:
             logger.warning("Signal generator returned empty scores; skipping orders")
             return {}
 
-        # 3. Latest prices for position sizing (last close from H5 window)
-        lookback = self.config.get("data", {}).get("lookback_days", 300)
-        window_df = sg._load_h5_window(as_of)
+        # 3. Latest prices for position sizing — H5 has MultiIndex(datetime, instrument)
         prices: Dict[str, float] = {}
-        if window_df is not None and not window_df.empty:
-            inst_col = "instrument" if "instrument" in window_df.columns else window_df.columns[1]
-            close_col = "close" if "close" in window_df.columns else "Close"
-            dt_col = "datetime" if "datetime" in window_df.columns else window_df.columns[0]
-            latest = (
-                window_df.sort_values(dt_col)
-                .groupby(inst_col)[close_col]
-                .last()
-            )
-            prices = latest.to_dict()
+        try:
+            import pandas as pd
+            window_df = sg._load_h5_window(pd.Timestamp("today"))
+            if window_df is not None and not window_df.empty:
+                close_col = "$close" if "$close" in window_df.columns else "close"
+                if close_col in window_df.columns:
+                    latest = window_df[close_col].groupby(level="instrument").last()
+                    prices = latest.to_dict()
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Could not extract prices from H5: %s", exc)
 
         # 4. Rebalance
         constructor = PortfolioConstructor(
             topk=int(port_cfg.get("topk", 20)),
             n_drop=int(port_cfg.get("n_drop", 5)),
             capital=float(port_cfg.get("capital", 1_000_000)),
+            max_position_pct=float(port_cfg.get("max_position_pct", 0.05)),
+            min_adv=float(port_cfg.get("min_adv", 0)),
         )
         result = constructor.rebalance(
             scores=scores,
@@ -109,7 +112,7 @@ class TradingScheduler:
         orders_file = orders_dir / f"pending_orders_{today}.json"
         order_data: Dict[str, Any] = {
             "date": today,
-            "as_of": as_of.isoformat(),
+            "as_of": today,
             "scores_count": len(scores),
             "orders": [
                 {
@@ -121,7 +124,7 @@ class TradingScheduler:
                 }
                 for o in result.orders
             ],
-            "target_positions": result.target_positions,
+            "target_positions": result.target_portfolio,
         }
         orders_file.write_text(json.dumps(order_data, indent=2))
         logger.info("Orders saved: %s (%d orders)", orders_file, len(result.orders))
