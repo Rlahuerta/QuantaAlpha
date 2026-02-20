@@ -59,4 +59,6 @@ rdagent==0.8.0             # RD-Agent framework (pinned for compatibility)
 # Live trading data pipeline
 yfinance                   # US market data (EOD OHLCV for live trading pipeline)
 lxml                       # HTML parsing for yfinance / Wikipedia ticker scraping
+apscheduler>=3.10          # Daily EOD scheduling for live pipeline
+ib_insync>=0.9.86          # Interactive Brokers TWS API wrapper
 pyqlib                     # Qlib quantitative research framework

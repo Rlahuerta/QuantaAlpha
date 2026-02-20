@@ -89,12 +89,16 @@ class PortfolioConstructor:
         capital: float = 1_000_000.0,
         equal_weight: bool = True,
         min_order_shares: int = 1,
+        max_position_pct: float = 0.05,
+        min_adv: float = 0.0,
     ):
         self.topk = topk
         self.n_drop = n_drop
         self.capital = capital
         self.equal_weight = equal_weight
         self.min_order_shares = min_order_shares
+        self.max_position_pct = max_position_pct  # max single position as fraction of capital
+        self.min_adv = min_adv  # minimum average daily volume ($); 0 = disabled
 
     # ------------------------------------------------------------------
     # Core algorithm
@@ -132,15 +136,33 @@ class PortfolioConstructor:
         target = sorted(current_target | set(to_add), key=lambda t: scores.get(t, 0.0), reverse=True)
         return target[: self.topk], to_drop
 
+    def _apply_liquidity_filter(
+        self,
+        scores: Dict[str, float],
+        adv: Dict[str, float],
+    ) -> Dict[str, float]:
+        """Remove tickers whose average daily volume (USD) is below min_adv."""
+        if self.min_adv <= 0 or not adv:
+            return scores
+        filtered = {t: s for t, s in scores.items() if adv.get(t, 0.0) >= self.min_adv}
+        removed = len(scores) - len(filtered)
+        if removed:
+            log.info("Liquidity filter: removed %d tickers with ADV < $%.0fM",
+                     removed, self.min_adv / 1_000_000)
+        return filtered
+
     def _compute_target_shares(
         self,
         target: List[str],
         prices: Dict[str, float],
     ) -> Dict[str, int]:
-        """Compute integer share counts for equal-weight target portfolio."""
+        """Compute integer share counts with equal-weight + position cap."""
         if not target:
             return {}
         weight = 1.0 / len(target) if self.equal_weight else 1.0 / len(target)
+        # Apply position cap: cap weight at max_position_pct
+        if self.max_position_pct > 0:
+            weight = min(weight, self.max_position_pct)
         target_shares = {}
         for ticker in target:
             price = prices.get(ticker)
@@ -162,6 +184,7 @@ class PortfolioConstructor:
         positions: Dict[str, float],
         prices: Dict[str, float],
         as_of_date: Optional[str] = None,
+        adv: Optional[Dict[str, float]] = None,
     ) -> RebalanceResult:
         """
         Compute today's rebalance orders.
@@ -171,12 +194,17 @@ class PortfolioConstructor:
             positions: current holdings {ticker: shares_or_notional_float}
             prices:    current prices {ticker: float} (close or mid)
             as_of_date: ISO date string for logging
+            adv:       average daily volume in USD {ticker: float}; used for
+                       liquidity filtering when min_adv > 0
 
         Returns:
             RebalanceResult with orders list and target portfolio.
         """
         import datetime
         date_str = as_of_date or str(datetime.date.today())
+
+        # Apply liquidity filter before TopkDropout selection
+        filtered_scores = self._apply_liquidity_filter(scores, adv or {})
 
         # Normalize positions to integer shares (may arrive as notional floats)
         current_holdings_int: Dict[str, int] = {}
@@ -187,7 +215,7 @@ class PortfolioConstructor:
                 current_holdings_int[ticker] = shares
 
         current_list = list(current_holdings_int.keys())
-        target_list, dropped = self._select_topk_with_dropout(scores, current_list)
+        target_list, dropped = self._select_topk_with_dropout(filtered_scores, current_list)
         target_shares = self._compute_target_shares(target_list, prices)
 
         orders: List[Order] = []
