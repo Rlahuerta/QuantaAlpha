@@ -328,3 +328,64 @@ def test_parquet_portfolio_next_ret_uses_t_plus_2_open():
         # Last two rows must be NaN (not enough future data for shift(-2))
         assert _pd.isna(aa.loc[4, "next_ret"])
         assert _pd.isna(aa.loc[5, "next_ret"])
+
+
+def test_parquet_portfolio_topkdropout_ndrop_differentiates():
+    """TopkDropout simulation: different n_drop values must produce different turnover / returns."""
+    import numpy as np
+    from unittest.mock import patch
+    from quantaalpha.backtest.runner import BacktestRunner
+
+    runner = BacktestRunner.__new__(BacktestRunner)
+    base_cfg = {
+        "data": {"parquet_bundle_dir": None},
+        "backtest": {"backtest": {"exchange_kwargs": {"open_cost": 0.001, "close_cost": 0.001}}},
+    }
+
+    # 10 trading days, 10 symbols — scores rotate so different n_drop leads to different portfolios
+    dates = pd.date_range("2022-01-03", periods=10, freq="B")
+    symbols = [f"S{i:02d}" for i in range(10)]
+    # Build prices: fixed open=100 for all; next_ret=0.01 for all (neutral)
+    price_rows = []
+    for dt in dates:
+        for sym in symbols:
+            price_rows.append({"datetime": dt, "symbol": sym, "open": 100.0})
+    prices = pd.DataFrame(price_rows)
+    prices["datetime"] = pd.to_datetime(prices["datetime"])
+
+    bench_rows = [{"datetime": dt, "open": 100.0} for dt in dates]
+    bench = pd.DataFrame(bench_rows)
+    bench["datetime"] = pd.to_datetime(bench["datetime"])
+
+    # Scores rotate each day so holdings churn — S0..S4 high on day0, S5..S9 high on day1, etc.
+    pred_idx = []
+    pred_vals = []
+    for i, dt in enumerate(dates):
+        for j, sym in enumerate(symbols):
+            pred_idx.append((dt, sym))
+            # Rotate: odd days reverse the ranking
+            score = (j + i * 3) % 10
+            pred_vals.append(float(score))
+    pred = pd.Series(pred_vals, index=pd.MultiIndex.from_tuples(pred_idx, names=["datetime", "instrument"]))
+
+    def _run(n_drop_val):
+        cfg = dict(base_cfg)
+        cfg["backtest"]["strategy"] = {"kwargs": {"topk": 5, "n_drop": n_drop_val}}
+        runner.config = cfg
+        runner._parquet_prices_cache = None
+        runner._parquet_benchmark_cache = None
+        strategy_cfg = {"kwargs": {"topk": 5, "n_drop": n_drop_val}}
+        with patch.object(runner, "_load_parquet_prices", return_value=prices), \
+             patch.object(runner, "_load_parquet_benchmark", return_value=bench):
+            return runner._compute_portfolio_metrics_from_parquet(pred, strategy_cfg)
+
+    m1 = _run(n_drop_val=1)
+    m5 = _run(n_drop_val=5)
+
+    # Both should produce valid results
+    assert m1 and m5, "Both n_drop configs should return non-empty metrics"
+    # n_drop=1 limits turnover so costs are lower → higher annualized return
+    assert abs(m1["annualized_return"] - m5["annualized_return"]) > 1e-6, (
+        f"n_drop=1 and n_drop=5 returned identical ARR={m1['annualized_return']:.6f}; "
+        "n_drop must affect results"
+    )
