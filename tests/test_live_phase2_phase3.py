@@ -13,6 +13,7 @@ from typing import Dict
 from unittest.mock import MagicMock, patch
 
 import pytest
+import pandas as pd
 import yaml
 
 
@@ -223,6 +224,113 @@ class TestTradingSchedulerRunSignal:
             MockSG.from_meta.return_value = mock_sg
             s.run_signal()
         assert captured.get("positions", {}).get("AAPL") == 50
+
+    def test_run_signal_records_pnl_snapshot(self, live_config: Path, tmp_path: Path):
+        """run_signal() writes a P&L snapshot via PositionTracker."""
+        from quantaalpha.live.scheduler import TradingScheduler
+        import quantaalpha.live.scheduler as sched_mod
+        s = TradingScheduler(live_config)
+        mock_sg = self._make_mock_sg()
+        mock_constructor = MagicMock()
+        result = MagicMock()
+        result.orders = []
+        result.target_portfolio = {"AAPL": 100, "MSFT": 80}
+        mock_constructor.rebalance.return_value = result
+        with patch.object(sched_mod, "SignalGenerator") as MockSG, \
+             patch.object(sched_mod, "PortfolioConstructor", return_value=mock_constructor):
+            MockSG.from_meta.return_value = mock_sg
+            s.run_signal()
+        # Check positions.json was written with new target portfolio
+        pos_file = Path(s.config["output"]["positions_file"])
+        assert pos_file.exists()
+        state = json.loads(pos_file.read_text())
+        assert state["positions"]["AAPL"] == 100
+        assert state["positions"]["MSFT"] == 80
+        assert "pnl" in state
+        # Check pnl history file was written
+        pnl_dir = Path(s.config["output"]["pnl_dir"])
+        pnl_files = list(pnl_dir.glob("pnl_*.json"))
+        assert len(pnl_files) == 1
+
+    def test_run_signal_accumulates_pnl(self, live_config: Path, tmp_path: Path):
+        """Two consecutive runs accumulate cumulative P&L."""
+        from quantaalpha.live.scheduler import TradingScheduler
+        import quantaalpha.live.scheduler as sched_mod
+        s = TradingScheduler(live_config)
+        mock_sg = self._make_mock_sg()
+        mock_constructor = MagicMock()
+        result = MagicMock()
+        result.orders = []
+        result.target_portfolio = {"AAPL": 100}
+        mock_constructor.rebalance.return_value = result
+        with patch.object(sched_mod, "SignalGenerator") as MockSG, \
+             patch.object(sched_mod, "PortfolioConstructor", return_value=mock_constructor):
+            MockSG.from_meta.return_value = mock_sg
+            s.run_signal()
+            s.run_signal()
+        pos_file = Path(s.config["output"]["positions_file"])
+        state = json.loads(pos_file.read_text())
+        assert state["account_value"] > 0
+        assert "cumulative_pnl" in state["pnl"]
+
+    def test_run_signal_kill_switch_halts_orders(self, live_config: Path, tmp_path: Path):
+        """KillSwitch triggers when daily P&L exceeds loss limit — no orders file."""
+        from quantaalpha.live.scheduler import TradingScheduler
+        import quantaalpha.live.scheduler as sched_mod
+        s = TradingScheduler(live_config)
+        # Seed positions and config with low capital so small loss triggers kill switch
+        s.config["risk"] = {"daily_loss_limit_pct": 0.01}
+        s.config["portfolio"]["capital"] = 10_000
+        # Write existing positions with high value so P&L is computed
+        pos_file = Path(s.config["output"]["positions_file"])
+        pos_file.parent.mkdir(parents=True, exist_ok=True)
+        pos_file.write_text(json.dumps({
+            "positions": {"BAD_STOCK": 100},
+            "account_value": 10_000,
+            "pnl": {"cumulative_pnl": 0, "cumulative_excess_return": 0},
+        }))
+        mock_sg = self._make_mock_sg()
+        # Return prices that show a massive loss
+        import pandas as pd
+        idx = pd.MultiIndex.from_tuples(
+            [("2026-01-01", "BAD_STOCK"), ("2026-01-02", "BAD_STOCK")],
+            names=["datetime", "instrument"],
+        )
+        window_df = pd.DataFrame(
+            {"$close": [200.0, 50.0]},  # -75% drop → loss = 100 * 150 = $15k > 1% of $10k
+            index=idx,
+        )
+        mock_sg._load_h5_window.return_value = window_df
+        mock_constructor = MagicMock()
+        with patch.object(sched_mod, "SignalGenerator") as MockSG, \
+             patch.object(sched_mod, "PortfolioConstructor", return_value=mock_constructor):
+            MockSG.from_meta.return_value = mock_sg
+            result = s.run_signal()
+        assert result.get("kill_switch") is True
+        assert result.get("daily_pnl") < 0
+        # No rebalance should have been called
+        mock_constructor.rebalance.assert_not_called()
+        # P&L should still be recorded even on kill-switch day
+        pnl_dir = Path(s.config["output"]["pnl_dir"])
+        assert len(list(pnl_dir.glob("pnl_*.json"))) == 1
+
+    def test_run_signal_includes_daily_pnl_in_orders(self, live_config: Path):
+        """Order data includes daily_pnl and account_value fields."""
+        from quantaalpha.live.scheduler import TradingScheduler
+        import quantaalpha.live.scheduler as sched_mod
+        s = TradingScheduler(live_config)
+        mock_sg = self._make_mock_sg()
+        mock_constructor = MagicMock()
+        result = MagicMock()
+        result.orders = []
+        result.target_portfolio = {"AAPL": 50}
+        mock_constructor.rebalance.return_value = result
+        with patch.object(sched_mod, "SignalGenerator") as MockSG, \
+             patch.object(sched_mod, "PortfolioConstructor", return_value=mock_constructor):
+            MockSG.from_meta.return_value = mock_sg
+            order_data = s.run_signal()
+        assert "daily_pnl" in order_data
+        assert "account_value" in order_data
 
 
 # ===========================================================================
