@@ -186,8 +186,18 @@ class TestDataIngestorH5IO:
     def test_ingest_up_to_date_skips(self, tmp_path):
         from quantaalpha.live.data_ingestor import DataIngestor
         h5 = tmp_path / "pv.h5"
-        today_df = _make_ohlcv_df(start=str(date.today()), end=str(date.today()))
-        today_df.to_hdf(str(h5), key="data")
+        # Store data dated today (or later) so ingest sees last_date >= today
+        today_str = str(date.today())
+        rows = []
+        for ticker in ("AAPL", "MSFT"):
+            rows.append({
+                "datetime": pd.Timestamp(today_str),
+                "instrument": ticker,
+                "$open": 100.0, "$high": 102.0, "$low": 99.0,
+                "$close": 101.0, "$volume": 1_000_000.0,
+            })
+        df = pd.DataFrame(rows).set_index(["datetime", "instrument"]).astype("float32")
+        df.to_hdf(str(h5), key="data")
         ingestor = DataIngestor(h5_path=h5, tickers=["AAPL"])
         result = ingestor.ingest()
         assert result == 0
