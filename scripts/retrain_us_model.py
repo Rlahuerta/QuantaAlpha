@@ -48,10 +48,20 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _update_live_yaml(live_yaml_path: Path, meta_path: str) -> None:
-    """Patch the meta_path entry in live.yaml in-place."""
-    data = yaml.safe_load(live_yaml_path.read_text())
-    data.setdefault("model", {})["meta_path"] = meta_path
-    live_yaml_path.write_text(yaml.dump(data, default_flow_style=False, allow_unicode=True))
+    """Patch the meta_path entry in live.yaml using regex to preserve comments/formatting."""
+    import re
+    text = live_yaml_path.read_text()
+    new_text = re.sub(
+        r'(meta_path:\s*)(["\']?).*?\2\s*$',
+        rf'\g<1>"{meta_path}"',
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if new_text == text:
+        log.warning("Could not find meta_path in %s — appending", live_yaml_path)
+        new_text = text.rstrip() + f'\nmodel:\n  meta_path: "{meta_path}"\n'
+    live_yaml_path.write_text(new_text)
     log.info("Updated %s → model.meta_path = %s", live_yaml_path, meta_path)
 
 

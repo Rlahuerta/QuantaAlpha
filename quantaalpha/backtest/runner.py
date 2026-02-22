@@ -475,7 +475,7 @@ class BacktestRunner:
                         dates = result.index.get_level_values('datetime')
                     except KeyError:
                         dates = result.index.get_level_values(0)
-                    if isinstance(selector, tuple) and len(selector) == 2:
+                    if isinstance(selector, (tuple, list)) and len(selector) == 2:
                         start, end = selector
                         mask = (dates >= pd.Timestamp(start)) & (dates <= pd.Timestamp(end))
                         result = result.loc[mask]
@@ -859,22 +859,34 @@ class BacktestRunner:
                     if best_rounds and best_rounds > 0 and hasattr(dataset, 'handler') and hasattr(dataset, 'segments'):
                         orig_segs = dataset.segments
                         ext_segs = dict(orig_segs)
-                        # Extend train to cover validation period
                         ext_segs['train'] = (orig_segs['train'][0], orig_segs['valid'][1])
-                        # Use test as dummy valid segment (data exists there, no early stopping)
                         ext_segs['valid'] = orig_segs['test']
-                        dataset_ext = DatasetH(handler=dataset.handler, segments=ext_segs)
-                        params_ext = dict(model_config['params'])
-                        params_ext['num_boost_round'] = best_rounds
-                        params_ext.pop('early_stopping_round', None)
-                        model_ext = LGBModel(**params_ext)
-                        model_ext.fit(dataset_ext)
-                        pred_ext = model_ext.predict(dataset_ext)
-                        # Ensemble: 40% base (saw val period) + 60% extended (trained on more data)
-                        common_idx = pred.index.intersection(pred_ext.index)
-                        pred = pred.copy()
-                        pred.loc[common_idx] = 0.4 * pred.loc[common_idx] + 0.6 * pred_ext.loc[common_idx]
-                        print(f"  Extended training done (best_rounds={best_rounds}, ensemble 40/60)")
+
+                        handler = dataset.handler
+                        # For PrecomputedDataHandler: rebuild handler with new segments
+                        # to avoid DatasetH/handler interaction issues.
+                        if hasattr(handler, '_data') and hasattr(handler, '_segments'):
+                            handler_cls = type(handler)
+                            handler_ext = handler_cls(handler._data, ext_segs)
+                            dataset_ext = DatasetH(handler=handler_ext, segments=ext_segs)
+                        else:
+                            dataset_ext = DatasetH(handler=handler, segments=ext_segs)
+
+                        # Verify extended train segment is non-empty before fitting
+                        _train_check = dataset_ext.prepare("train", col_set=["feature", "label"], data_key="learn")
+                        if _train_check.empty:
+                            logger.warning("Extended training: train segment empty, skipping")
+                        else:
+                            params_ext = dict(model_config['params'])
+                            params_ext['num_boost_round'] = best_rounds
+                            params_ext.pop('early_stopping_round', None)
+                            model_ext = LGBModel(**params_ext)
+                            model_ext.fit(dataset_ext)
+                            pred_ext = model_ext.predict(dataset_ext)
+                            common_idx = pred.index.intersection(pred_ext.index)
+                            pred = pred.copy()
+                            pred.loc[common_idx] = 0.4 * pred.loc[common_idx] + 0.6 * pred_ext.loc[common_idx]
+                            print(f"  Extended training done (best_rounds={best_rounds}, ensemble 40/60)")
                     else:
                         logger.debug("Extended training skipped: no best_iteration or dataset attrs unavailable")
                 except Exception as ext_err:

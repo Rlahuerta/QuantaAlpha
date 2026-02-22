@@ -444,9 +444,14 @@ class CustomFactorCalculator:
 
         instruments = self._get_market_instruments()
 
-        # reference_index is set from the first successfully loaded factor; all
-        # subsequent factors are aligned to it via reindex (produces NaN for gaps).
+        # reference_index: use full H5 data index to avoid truncation when first
+        # cached factor has a shorter date range than the training window.
         reference_index = None
+        if self._raw_data_df is not None and isinstance(self._raw_data_df.index, pd.MultiIndex):
+            reference_index = self._raw_data_df.index
+            logger.debug(f"  reference_index from data_df: {len(reference_index)} rows, "
+                         f"{reference_index.get_level_values(0).min()} to "
+                         f"{reference_index.get_level_values(0).max()}")
         columns_data: List[np.ndarray] = []   # one 1-D float16 array per factor
         col_names: List[str] = []
 
