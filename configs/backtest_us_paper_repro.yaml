@@ -1,27 +1,26 @@
 ######################################################################
-# Backtest V2 — US Equities configuration
-# Data: yfinance EOD OHLCV (S&P 500 + NASDAQ-100, 517 tickers, 2016-2026)
-#       stored in git_ignore_folder/factor_implementation_source_data_us/daily_pv.h5
-# Factor source: US-mined decay-filtered library (all_factors_library_exp_us_decay5d.json)
-# Model: LightGBM  |  Strategy: TopkDropout (topk=30, n_drop=2)
-# Benchmark: SPY (from git_ignore_folder/parquet_us/benchmark_gspc.parquet)
+# Backtest V2 — US S&P 500 Paper Reproduction Config
+# Matches paper Table 7 parameters exactly:
+#   topk=50, n_drop=5, single-day label, 0.05%/0.15% costs
+#   Benchmark: SPX
+# Paper approach: zero-shot CN→US factor transfer
 ######################################################################
 
 random_seed: 42
 
 experiment:
-  name: "us_backtest"
-  recorder: "us_recorder"
+  name: "us_paper_repro"
+  recorder: "us_paper_recorder"
   output_dir: "data/results/backtest_v2_results"
   output_metrics_file: "backtest_metrics.json"
-  model_save_dir: "data/models"   # trained LightGBM saved here for Phase 2 signal generation
+  model_save_dir: "data/models"
 
 ######################################################################
 # 1. Factor source
 ######################################################################
 
 factor_source:
-  type: "custom"
+  type: "combined"
 
   custom:
     json_files: []
@@ -38,28 +37,21 @@ factor_source:
 ######################################################################
 
 data:
-  # Qlib CN data is used only to initialise the framework (LGBModel, risk_analysis, R.start).
-  # All US factor computation and label computation use the H5/parquet paths below.
   provider_uri: "~/.qlib/qlib_data/cn_data"
   region: "cn"
-  market: "sp500"           # Unknown to CN Qlib → no CSI300 instrument filtering applied
+  market: "sp500"
   start_time: "2016-01-01"
-  end_time:   "2025-12-31"
+  end_time:   "2025-12-26"
 
-  # Parquet bundle for US portfolio backtest fallback and label computation.
-  # Files: sp500_prices.parquet, benchmark_gspc.parquet
   parquet_bundle_dir: "git_ignore_folder/parquet_us"
 
 ######################################################################
-# 3. Dataset and preprocessing
+# 3. Dataset and preprocessing (Paper: single-day label, CSRankNorm)
 ######################################################################
 
 dataset:
-  # Multi-period label: 50% 1-day + 30% 5-day + 20% 20-day forward return.
-  # Blending horizons reduces label noise while preserving short-term alpha.
-  # When parquet_bundle_dir is set, _compute_label() parses this expression
-  # directly from the Ref($close,-N) terms — no Qlib D.features() call needed.
-  label: "(Ref($close, -2) / Ref($close, -1) - 1) * 0.5 + (Ref($close, -6) / Ref($close, -1) - 1) * 0.3 + (Ref($close, -21) / Ref($close, -1) - 1) * 0.2"
+  # Paper label: next-day return (single period)
+  label: "Ref($close, -2) / Ref($close, -1) - 1"
 
   learn_processors:
     - class: "Fillna"
@@ -89,10 +81,10 @@ dataset:
   segments:
     train: ["2016-01-01", "2020-12-31"]
     valid: ["2021-01-01", "2021-12-31"]
-    test:  ["2022-01-01", "2025-12-31"]
+    test:  ["2022-01-01", "2025-12-26"]
 
 ######################################################################
-# 4. Model
+# 4. Model (same LightGBM params as paper)
 ######################################################################
 
 model:
@@ -116,7 +108,7 @@ model:
     feature_fraction_bynode: 0.8
 
 ######################################################################
-# 5. Backtest and portfolio
+# 5. Backtest and portfolio (Paper Table 7 exact params)
 ######################################################################
 
 backtest:
@@ -125,24 +117,24 @@ backtest:
     module_path: "qlib.contrib.strategy"
     kwargs:
       signal: "<PRED>"
-      topk: 20
-      n_drop: 1
+      topk: 50
+      n_drop: 5
     rebalance_freq: 1
 
   backtest:
     start_time: "2022-01-01"
-    end_time:   "2025-12-31"
-    account: 1000000           # $1 M paper capital
-    benchmark: "SPY"           # Used by parquet portfolio metrics path
+    end_time:   "2025-12-26"
+    account: 1000000
+    benchmark: "SPY"
     exchange_kwargs:
-      limit_threshold: null    # No circuit breakers in US markets
+      limit_threshold: 0.095    # Paper uses 9.5% limit (Table 7)
       deal_price: "open"
-      open_cost:  0.001        # 0.10% round-trip (US brokerage + market impact)
-      close_cost: 0.001
+      open_cost:  0.0005        # 0.05% buying fee (paper Table 7)
+      close_cost: 0.0015        # 0.15% selling fee (paper Table 7)
       min_cost: 1
 
 ######################################################################
-# 6. LLM (for custom factor computation)
+# 6. LLM
 ######################################################################
 
 max_memory_gb: 40
@@ -154,7 +146,6 @@ llm:
   timeout: 300
   max_retries: 3
   cache_results: true
-  # US-specific cache dir — separate from CN to avoid expression hash collisions
   cache_dir: "data/results/factor_cache_us"
   auto_extract_cache: false
   debug: false
@@ -167,5 +158,4 @@ factor_calculation:
   output_dir: "data/results/computed_factors"
   save_intermediate: true
   n_jobs: 4
-  # US OHLCV data — bypasses Qlib D.features() for factor computation
   data_file: "git_ignore_folder/factor_implementation_source_data_us/daily_pv.h5"
