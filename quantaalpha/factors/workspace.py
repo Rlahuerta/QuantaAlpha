@@ -172,13 +172,20 @@ class QlibFBWorkspace(_RdagentQlibFBWorkspace):
         super().before_execute()
 
         # Ensure qlib default provider path exists when mining is launched without run.sh.
-        qlib_data_dir = os.environ.get("QLIB_DATA_DIR") or os.environ.get("QLIB_PROVIDER_URI")
+        # Use market-region-specific symlink name so CN and US mining can coexist.
+        from quantaalpha.factors.coder.config import FACTOR_COSTEER_SETTINGS
+        region = FACTOR_COSTEER_SETTINGS.market_region.lower()
+        symlink_name = "us_data" if region == "us" else "cn_data"
+        # For US region, prefer QLIB_PROVIDER_URI (set by run_us.sh to the actual US
+        # data path) over QLIB_DATA_DIR (which may still point to CN data from .env).
+        if region == "us":
+            qlib_data_dir = (os.environ.get("QLIB_PROVIDER_URI")
+                             or os.environ.get("QLIB_DATA_DIR"))
+        else:
+            qlib_data_dir = (os.environ.get("QLIB_DATA_DIR")
+                             or os.environ.get("QLIB_PROVIDER_URI"))
         if qlib_data_dir:
             source = Path(qlib_data_dir).expanduser().resolve()
-            # Use market-region-specific symlink name so CN and US mining can coexist.
-            from quantaalpha.factors.coder.config import FACTOR_COSTEER_SETTINGS
-            region = FACTOR_COSTEER_SETTINGS.market_region.lower()
-            symlink_name = "us_data" if region == "us" else "cn_data"
             target = Path.home() / ".qlib" / "qlib_data" / symlink_name
             if source.exists():
                 target.parent.mkdir(parents=True, exist_ok=True)
