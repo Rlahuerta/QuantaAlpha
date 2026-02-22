@@ -102,13 +102,21 @@ def retrain(
     log.info("Config          : %s", config_path)
     log.info("Dry run         : %s", dry_run)
 
-    runner = BacktestRunner(cfg)
-    runner.run(
-        factor_json=str(factor_json),
-        factor_source="custom",
-        output_name=run_name,
-        dry_run=dry_run,
-    )
+    # BacktestRunner expects a file path, not a dict.
+    # Write the (possibly patched) config to a temp file so model save paths are honoured.
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as tmp:
+        yaml.dump(cfg, tmp, default_flow_style=False, allow_unicode=True)
+        tmp_cfg_path = tmp.name
+
+    runner = BacktestRunner(tmp_cfg_path)
+    if not dry_run:
+        runner.run(
+            factor_json=[str(factor_json)],
+            factor_source="custom",
+            output_name=run_name,
+        )
+    Path(tmp_cfg_path).unlink(missing_ok=True)
 
     meta_path = model_dir / f"{run_name}_meta.json"
 

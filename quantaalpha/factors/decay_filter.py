@@ -271,6 +271,7 @@ def _build_fwd_returns(
             return close_by_inst, None, fwd_rets
 
     # --- Slow path: extract from pre-loaded DataFrame ---
+    close = None
     if close is None:
         if price_df is None:
             return None, None, {}

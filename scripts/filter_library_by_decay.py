@@ -161,7 +161,7 @@ def main() -> None:
     print(f"Loaded {total} factors from {input_path}", flush=True)
 
     horizons = sorted({1, args.horizon, 10, 20})
-    print(f"Building forward-return matrices (2016-2025, h5py fast path) ...", flush=True)
+    print(f"Building forward-return matrices (2016-2025) ...", flush=True)
     from quantaalpha.factors.decay_filter import (
         _build_fwd_returns,
         _load_factor_wide_from_h5,
@@ -169,8 +169,15 @@ def main() -> None:
     )
     import gc
     _date_range = (pd.Timestamp("2016-01-01"), pd.Timestamp("2025-12-31"))
+    # Load price_df as fallback when h5py fast path fails
+    price_df = None
+    try:
+        price_df = pd.read_hdf(str(h5_path), key="data")[["$close"]]
+        print(f"  Loaded price_df: {len(price_df)} rows", flush=True)
+    except Exception as exc:
+        print(f"  Could not load price_df: {exc}", flush=True)
     _, _, fwd_rets = _build_fwd_returns(
-        None, horizons, exec_lag=1,
+        price_df, horizons, exec_lag=1,
         date_range=_date_range, h5_path=str(h5_path),
         instruments=instruments_filter,
     )

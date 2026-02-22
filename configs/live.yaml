@@ -7,7 +7,7 @@
 
 model:
   # Saved LightGBM booster + feature list + training metadata
-  meta_path: "data/models/us_mp_t30d2_meta.json"
+  meta_path: "data/models/us_retrain_20260222_103323_meta.json"
 
 data:
   h5_path: "git_ignore_folder/factor_implementation_source_data_us/daily_pv.h5"
