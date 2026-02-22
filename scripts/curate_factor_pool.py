@@ -100,8 +100,15 @@ def load_factor_validation_slice(
         return None
 
 
-def compute_label(qlib_data_dir: str, start: str, end: str) -> pd.Series:
-    """Compute next-day return label: Ref($close, -2) / Ref($close, -1) - 1."""
+def compute_label(qlib_data_dir: str, start: str, end: str, market: str = "cn",
+                  prices_parquet: str | None = None) -> pd.Series:
+    """Compute next-day return label: Ref($close, -2) / Ref($close, -1) - 1.
+
+    For US market, uses parquet prices instead of Qlib D.features().
+    """
+    if market == "us":
+        return _compute_label_us(prices_parquet or "data/sp500_parquet_bundle/sp500_prices.parquet",
+                                 start, end)
     import qlib
     from qlib.data import D
 
@@ -115,6 +122,23 @@ def compute_label(qlib_data_dir: str, start: str, end: str) -> pd.Series:
     if label.index.names == ["instrument", "datetime"]:
         label = label.swaplevel().sort_index()
     return label
+
+
+def _compute_label_us(prices_parquet: str, start: str, end: str) -> pd.Series:
+    """Compute 1-day forward return label from US parquet prices."""
+    df = pd.read_parquet(prices_parquet, columns=["datetime", "symbol", "close"])
+    df["datetime"] = pd.to_datetime(df["datetime"])
+    mask = (df["datetime"] >= start) & (df["datetime"] <= end)
+    df = df.loc[mask].sort_values(["symbol", "datetime"])
+    # Ref($close, -2) / Ref($close, -1) - 1
+    close_grp = df.groupby("symbol")["close"]
+    label = close_grp.shift(-2) / close_grp.shift(-1) - 1
+    idx = pd.MultiIndex.from_arrays(
+        [df["datetime"].values, df["symbol"].values],
+        names=["datetime", "instrument"],
+    )
+    out = pd.Series(label.values, index=idx, dtype=np.float32, name="label")
+    return out.dropna().sort_index()
 
 
 def compute_rankic_per_factor(
@@ -188,6 +212,163 @@ def compute_pairwise_corr(
     return float(np.abs(a.corr(b)))
 
 
+def _build_factor_matrix(
+    factors: dict,
+    cache_dir: str,
+    label: pd.Series,
+    start_ts: pd.Timestamp,
+    end_ts: pd.Timestamp,
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """Build aligned factor matrix (float32) + label vector on common index.
+
+    Returns:
+        factor_matrix: shape (n_common, n_factors), float32, NaN-filled
+        label_vec: shape (n_common,), float32
+        names: list of factor names (matching columns)
+    """
+    print("  Building aligned factor matrix...")
+    # Use label's index as reference
+    ref_idx = label.index
+
+    factor_cols = {}  # name -> np.array aligned to ref_idx
+    names_order = []
+
+    for i, (name, v) in enumerate(factors.items()):
+        expr = v.get("factor_expression", "")
+        if not expr:
+            continue
+
+        s = load_factor_validation_slice(expr, cache_dir, start_ts, end_ts)
+        if s is None:
+            continue
+
+        # Reindex to common reference (fills missing with NaN)
+        aligned = s.reindex(ref_idx).astype(np.float32).values
+        factor_cols[name] = aligned
+        names_order.append(name)
+        del s
+
+        if (i + 1) % 100 == 0:
+            _release_memory()
+            print(f"    Loaded {len(names_order)}/{len(factors)} factors (RSS: {_rss_mb():.0f} MB)")
+
+    _release_memory()
+    n_factors = len(names_order)
+    n_rows = len(ref_idx)
+    print(f"  Matrix: {n_rows} rows × {n_factors} factors")
+
+    # Stack into matrix
+    mat = np.column_stack([factor_cols[n] for n in names_order])  # (n_rows, n_factors)
+    label_vec = label.values.astype(np.float32)
+
+    del factor_cols
+    _release_memory()
+    print(f"  Matrix memory: {mat.nbytes / 1e6:.0f} MB (RSS: {_rss_mb():.0f} MB)")
+
+    return mat, label_vec, names_order
+
+
+def compute_rankic_vectorized(
+    mat: np.ndarray,
+    label_vec: np.ndarray,
+    date_codes: np.ndarray,
+    n_dates: int,
+) -> np.ndarray:
+    """Compute mean daily RankIC for all factors at once.
+
+    Args:
+        mat: (n_rows, n_factors) float32
+        label_vec: (n_rows,) float32
+        date_codes: (n_rows,) int, maps each row to a date index
+        n_dates: number of unique dates
+
+    Returns:
+        rankic: (n_factors,) mean daily RankIC
+    """
+    n_factors = mat.shape[1]
+    ic_sums = np.zeros(n_factors, dtype=np.float64)
+    ic_counts = np.zeros(n_factors, dtype=np.int32)
+
+    for d in range(n_dates):
+        day_mask = date_codes == d
+        n_stocks = day_mask.sum()
+        if n_stocks < 10:
+            continue
+
+        lv = label_vec[day_mask]
+        if np.isnan(lv).all() or np.nanstd(lv) < 1e-10:
+            continue
+
+        for j in range(n_factors):
+            fv = mat[day_mask, j]
+            valid = ~(np.isnan(fv) | np.isnan(lv))
+            if valid.sum() < 10:
+                continue
+            fv_v = fv[valid]
+            lv_v = lv[valid]
+            if np.std(fv_v) < 1e-10:
+                continue
+            ic, _ = spearmanr(fv_v, lv_v)
+            if not np.isnan(ic):
+                ic_sums[j] += ic
+                ic_counts[j] += 1
+
+        if (d + 1) % 50 == 0:
+            print(f"    RankIC: {d+1}/{n_dates} dates processed...")
+
+    with np.errstate(invalid='ignore'):
+        result = np.where(ic_counts > 0, ic_sums / ic_counts, 0.0)
+    return result
+
+
+def greedy_decorrelation_numpy(
+    mat: np.ndarray,
+    rankic: np.ndarray,
+    names: list[str],
+    corr_threshold: float,
+    max_pool: int,
+) -> list[int]:
+    """Greedy admission using numpy correlation — O(admitted × candidates) but fast.
+
+    Returns indices of admitted factors.
+    """
+    # Sort by |RankIC| descending
+    order = np.argsort(-np.abs(rankic))
+
+    admitted_idx = []
+    # Pre-compute per-column stats for fast correlation
+    # corr(a, b) = cov(a,b) / (std_a * std_b)
+    # We'll compute correlation on-the-fly using numpy columns
+
+    for rank, fi in enumerate(order):
+        if len(admitted_idx) >= max_pool:
+            break
+        if abs(rankic[fi]) < 1e-6:
+            continue
+
+        col = mat[:, fi]
+
+        # Check correlation with all admitted
+        too_correlated = False
+        for ai in admitted_idx:
+            acol = mat[:, ai]
+            # Fast correlation: handle NaNs
+            valid = ~(np.isnan(col) | np.isnan(acol))
+            if valid.sum() < 100:
+                continue
+            c = np.corrcoef(col[valid], acol[valid])[0, 1]
+            if abs(c) > corr_threshold:
+                too_correlated = True
+                break
+
+        if not too_correlated:
+            admitted_idx.append(fi)
+            if len(admitted_idx) % 20 == 0:
+                print(f"    Admitted {len(admitted_idx)} factors (checked {rank+1}/{len(order)})...")
+
+    return admitted_idx
+
+
 def curate_pool(
     input_path: str,
     output_path: str,
@@ -197,10 +378,12 @@ def curate_pool(
     valid_end: str = "2021-12-31",
     corr_threshold: float = 0.7,
     max_ratio: float = 0.5,
+    market: str = "cn",
+    prices_parquet: str | None = None,
 ):
-    """Main curation pipeline. Memory-efficient: streams factors, uses float16."""
+    """Main curation pipeline. Matrix-based for speed, float32 for accuracy."""
     print(f"Loading factor library: {input_path}")
-    print(f"  RSS at start: {_rss_mb():.0f} MB")
+    print(f"  Market: {market}, RSS at start: {_rss_mb():.0f} MB")
     with open(input_path) as f:
         lib = json.load(f)
 
@@ -214,96 +397,59 @@ def curate_pool(
 
     # Step 1: Compute label
     print(f"\n[1/4] Computing label ({valid_start} to {valid_end})...")
-    label = compute_label(qlib_data_dir, valid_start, valid_end)
+    label = compute_label(qlib_data_dir, valid_start, valid_end, market=market,
+                          prices_parquet=prices_parquet)
     print(f"  Label: {len(label)} rows, {label.nbytes/1e6:.1f} MB")
 
-    # Step 2: Stream factors — compute RankIC one at a time, keep only validation slice
-    print(f"\n[2/4] Computing RankIC (streaming, {FACTOR_DTYPE.__name__})...")
-    rankic_scores = {}
-    expr_map = {}  # name -> expression (to reload later)
-    loaded = 0
-
-    for i, (name, v) in enumerate(factors.items()):
-        expr = v.get("factor_expression", "")
-        if not expr:
-            continue
-
-        s = load_factor_validation_slice(expr, cache_dir, start_ts, end_ts)
-        if s is None:
-            continue
-
-        loaded += 1
-        ic = compute_rankic_per_factor(s, label)
-        rankic_scores[name] = ic
-        expr_map[name] = expr
-        del s  # free immediately
-        _release_memory()
-
-        if (i + 1) % 50 == 0:
-            print(f"  [{i+1}/{total}] RankIC computed for {loaded} factors... (RSS: {_rss_mb():.0f} MB)")
-
-    _release_memory()
-    print(f"  Loaded & scored: {loaded} / {total} (RSS: {_rss_mb():.0f} MB)")
-
-    # Sort by absolute RankIC descending
-    sorted_factors = sorted(
-        rankic_scores.items(), key=lambda x: abs(x[1]), reverse=True
+    # Step 2: Build aligned matrix (one disk pass)
+    print(f"\n[2/4] Loading factors into aligned matrix...")
+    mat, label_vec, names = _build_factor_matrix(
+        factors, cache_dir, label, start_ts, end_ts,
     )
-
-    print(f"\n  Top 10 by |RankIC|:")
-    for name, ic in sorted_factors[:10]:
-        print(f"    {name}: RankIC={ic:.4f}")
-
-    positive = sum(1 for _, ic in sorted_factors if ic > 0)
-    print(f"  Positive RankIC: {positive}/{len(sorted_factors)}")
-
-    # Step 3: Greedy admission with correlation filter
-    # Only admitted factors stay in memory (as float16 validation slices)
-    print(f"\n[3/4] Greedy pool admission (corr<{corr_threshold}, cap={max_pool})...")
-    admitted = []
-    admitted_series = []  # float16 validation slices only
-
-    for name, ic in sorted_factors:
-        if len(admitted) >= max_pool:
-            break
-
-        if abs(ic) < 1e-6:
-            continue
-
-        # Reload validation slice (float16)
-        candidate = load_factor_validation_slice(
-            expr_map[name], cache_dir, start_ts, end_ts
-        )
-        if candidate is None:
-            continue
-
-        # Check correlation with all admitted factors
-        too_correlated = False
-        for admitted_s in admitted_series:
-            corr = compute_pairwise_corr(candidate, admitted_s)
-            if corr > corr_threshold:
-                too_correlated = True
-                break
-
-        if not too_correlated:
-            admitted.append(name)
-            admitted_series.append(candidate)
-            if len(admitted) % 20 == 0:
-                mem_mb = sum(s.nbytes for s in admitted_series) / 1e6
-                print(f"  Admitted {len(admitted)} factors ({mem_mb:.0f} MB)...")
-        else:
-            del candidate
-
-    del admitted_series
+    del label
     _release_memory()
-    print(f"  Final pool: {len(admitted)} factors (from {total} total)")
 
-    # Step 4: Build output library
-    print(f"\n[4/4] Writing curated library: {output_path}")
+    # Date codes for daily RankIC
+    # Reconstruct date index from the label's original index
+    label_reloaded = compute_label(qlib_data_dir, valid_start, valid_end,
+                                   market=market, prices_parquet=prices_parquet)
+    dt_level = label_reloaded.index.get_level_values("datetime")
+    date_cats = pd.Categorical(dt_level)
+    date_codes = date_cats.codes.astype(np.int32)
+    n_dates = len(date_cats.categories)
+    del label_reloaded
+    _release_memory()
+    print(f"  {n_dates} trading days in validation period")
+
+    # Step 3: Compute RankIC for all factors (vectorized over dates)
+    print(f"\n[3/4] Computing RankIC ({len(names)} factors × {n_dates} days)...")
+    rankic = compute_rankic_vectorized(mat, label_vec, date_codes, n_dates)
+
+    # Report top factors
+    sorted_idx = np.argsort(-np.abs(rankic))
+    print(f"\n  Top 10 by |RankIC|:")
+    for i in sorted_idx[:10]:
+        print(f"    {names[i]}: RankIC={rankic[i]:.4f}")
+    positive = (rankic > 0).sum()
+    print(f"  Positive RankIC: {positive}/{len(rankic)}")
+
+    # Step 4: Greedy decorrelation (numpy — fast)
+    print(f"\n[4/4] Greedy pool admission (|corr|<{corr_threshold}, cap={max_pool})...")
+    admitted_idx = greedy_decorrelation_numpy(mat, rankic, names, corr_threshold, max_pool)
+
+    admitted_names = [names[i] for i in admitted_idx]
+    admitted_ics = [float(rankic[i]) for i in admitted_idx]
+
+    del mat, label_vec
+    _release_memory()
+    print(f"  Final pool: {len(admitted_names)} factors (from {total} total)")
+
+    # Build output library
+    print(f"\nWriting curated library: {output_path}")
     curated_factors = {}
-    for name in admitted:
+    for name, ic in zip(admitted_names, admitted_ics):
         entry = factors[name].copy()
-        entry["rankic_validation"] = rankic_scores[name]
+        entry["rankic_validation"] = ic
         curated_factors[name] = entry
 
     output = {
@@ -322,15 +468,15 @@ def curate_pool(
         "factors": curated_factors,
     }
 
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     with open(output_path, "w") as f:
         json.dump(output, f, indent=2, default=str)
 
     print(f"\n{'='*60}")
     print(f"Curated pool: {len(curated_factors)} factors")
     print(f"Reduction: {total} → {len(curated_factors)} ({100*len(curated_factors)/total:.0f}%)")
-    ics = [rankic_scores[n] for n in admitted]
-    print(f"RankIC range: {min(ics):.4f} to {max(ics):.4f} (mean={np.mean(ics):.4f})")
+    if admitted_ics:
+        print(f"RankIC range: {min(admitted_ics):.4f} to {max(admitted_ics):.4f} (mean={np.mean(admitted_ics):.4f})")
     print(f"{'='*60}")
 
 
@@ -344,6 +490,10 @@ def main():
     parser.add_argument("--valid-end", default="2021-12-31")
     parser.add_argument("--corr-threshold", type=float, default=0.7)
     parser.add_argument("--max-ratio", type=float, default=0.5)
+    parser.add_argument("--market", default="cn", choices=["cn", "us"],
+                        help="Market: cn (CSI300) or us (S&P500)")
+    parser.add_argument("--prices-parquet", default=None,
+                        help="US prices parquet path (required for --market us)")
     args = parser.parse_args()
 
     curate_pool(
@@ -355,6 +505,8 @@ def main():
         valid_end=args.valid_end,
         corr_threshold=args.corr_threshold,
         max_ratio=args.max_ratio,
+        market=args.market,
+        prices_parquet=args.prices_parquet,
     )
 
 
