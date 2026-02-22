@@ -127,7 +127,7 @@ def compute_label(qlib_data_dir: str, start: str, end: str, market: str = "cn",
 def _compute_label_us(prices_parquet: str, start: str, end: str) -> pd.Series:
     """Compute 1-day forward return label from US parquet prices."""
     df = pd.read_parquet(prices_parquet, columns=["datetime", "symbol", "close"])
-    df["datetime"] = pd.to_datetime(df["datetime"])
+    df["datetime"] = pd.to_datetime(df["datetime"]).dt.normalize()  # strip time component
     mask = (df["datetime"] >= start) & (df["datetime"] <= end)
     df = df.loc[mask].sort_values(["symbol", "datetime"])
     # Ref($close, -2) / Ref($close, -1) - 1
