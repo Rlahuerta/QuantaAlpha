@@ -1,0 +1,6 @@
+[run]
+branch = False
+
+[report]
+show_missing = True
+skip_empty = True
