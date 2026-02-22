@@ -632,3 +632,120 @@ def test_train_and_backtest_model_save_failure_does_not_crash(tmp_path, fake_qli
         gbdt_mod.LGBModel = original_lgb
 
     assert isinstance(metrics, dict)
+
+
+# ---------------------------------------------------------------------------
+# Regression: PrecomputedDataHandler must handle list selectors (YAML segments)
+# ---------------------------------------------------------------------------
+
+class TestPrecomputedDataHandlerListSelector:
+    """Regression for bug where YAML list segments bypassed date filtering."""
+
+    @staticmethod
+    def _make_handler():
+        """Create a minimal PrecomputedDataHandler with 3 years of data."""
+        import pandas as pd
+        import numpy as np
+        from qlib.data.dataset.handler import DataHandler
+
+        dates = pd.bdate_range("2016-01-01", "2018-12-31")
+        instruments = ["AAPL", "MSFT"]
+        idx = pd.MultiIndex.from_product([dates, instruments], names=["datetime", "instrument"])
+        n = len(idx)
+        cols = pd.MultiIndex.from_tuples([
+            ("feature", "f1"), ("feature", "f2"), ("label", "LABEL0")
+        ])
+        data = pd.DataFrame(np.random.randn(n, 3).astype(np.float32), index=idx, columns=cols)
+
+        class PrecomputedDataHandler(DataHandler):
+            def __init__(self, data_df, segments):
+                self._data = data_df
+                self._segments = segments
+            @property
+            def data_loader(self):
+                return None
+            @property
+            def instruments(self):
+                return list(self._data.index.get_level_values(1).unique())
+            def fetch(self, selector=None, level='datetime', col_set='feature',
+                     data_key=None, squeeze=False, proc_func=None):
+                if col_set in ('feature', 'label'):
+                    result = self._data[col_set].copy()
+                elif col_set == '__all' or col_set is None:
+                    result = self._data.copy()
+                else:
+                    if isinstance(col_set, (list, tuple)):
+                        result = self._data[list(col_set)].copy()
+                    else:
+                        result = self._data.copy()
+                if selector is not None:
+                    try:
+                        dates = result.index.get_level_values('datetime')
+                    except KeyError:
+                        dates = result.index.get_level_values(0)
+                    if isinstance(selector, (tuple, list)) and len(selector) == 2:
+                        start, end = selector
+                        mask = (dates >= pd.Timestamp(start)) & (dates <= pd.Timestamp(end))
+                        result = result.loc[mask]
+                    elif isinstance(selector, slice):
+                        start, end = selector.start, selector.stop
+                        if start is not None and end is not None:
+                            mask = (dates >= pd.Timestamp(start)) & (dates <= pd.Timestamp(end))
+                            result = result.loc[mask]
+                if squeeze and result.shape[1] == 1:
+                    result = result.iloc[:, 0]
+                return result
+            def get_cols(self, col_set='feature'):
+                return list(self._data[col_set].columns) if col_set in self._data.columns.get_level_values(0) else []
+            def setup_data(self, **kwargs):
+                pass
+            def config(self, **kwargs):
+                pass
+
+        segments = {
+            "train": ["2016-01-01", "2016-12-31"],
+            "valid": ["2017-01-01", "2017-12-31"],
+            "test":  ["2018-01-01", "2018-12-31"],
+        }
+        return PrecomputedDataHandler(data, segments), segments
+
+    def test_list_selector_filters_dates(self):
+        """List segments (from YAML) must filter dates, not return all data."""
+        import pandas as pd
+        from qlib.data.dataset import DatasetH
+
+        handler, segments = self._make_handler()
+        dataset = DatasetH(handler=handler, segments=segments)
+        train_df = dataset.prepare("train", col_set="feature")
+        dates = train_df.index.get_level_values("datetime")
+        assert dates.max() <= pd.Timestamp("2016-12-31"), \
+            f"Train data leaked past 2016: max date = {dates.max()}"
+        assert dates.min() >= pd.Timestamp("2016-01-01"), \
+            f"Train data before 2016: min date = {dates.min()}"
+
+    def test_tuple_selector_filters_dates(self):
+        """Tuple selectors must also filter correctly."""
+        import pandas as pd
+        from qlib.data.dataset import DatasetH
+
+        handler, segments = self._make_handler()
+        segments_tuple = {k: tuple(v) for k, v in segments.items()}
+        dataset = DatasetH(handler=handler, segments=segments_tuple)
+        test_df = dataset.prepare("test", col_set="feature")
+        dates = test_df.index.get_level_values("datetime")
+        assert dates.min() >= pd.Timestamp("2018-01-01")
+        assert dates.max() <= pd.Timestamp("2018-12-31")
+
+    def test_train_valid_test_no_overlap(self):
+        """Train/valid/test segments must not overlap."""
+        import pandas as pd
+        from qlib.data.dataset import DatasetH
+
+        handler, segments = self._make_handler()
+        dataset = DatasetH(handler=handler, segments=segments)
+        train = set(dataset.prepare("train", col_set="feature").index.get_level_values("datetime"))
+        valid = set(dataset.prepare("valid", col_set="feature").index.get_level_values("datetime"))
+        test  = set(dataset.prepare("test",  col_set="feature").index.get_level_values("datetime"))
+        assert not (train & valid), "train/valid overlap"
+        assert not (train & test), "train/test overlap"
+        assert not (valid & test), "valid/test overlap"
