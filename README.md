@@ -99,7 +99,7 @@ git clone https://github.com/QuantaAlpha/QuantaAlpha.git
 cd QuantaAlpha
 
 # If conda is not available in your shell yet, initialize it first (example path):
-# source ~/anaconda3/etc/profile.d/conda.sh
+# source ~/anaconda3/bin/activate root
 
 # Recommended: create environment from the versioned conda config
 conda env create -f environment.ollama.yml

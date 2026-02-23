@@ -9,7 +9,7 @@ This is a **daily rebalanced long-only portfolio** of 10 S&P 500 stocks.
 Every day after market close, the model:
 1. Scores all ~517 S&P 500 stocks using 89 alpha factors
 2. Picks the **top 10 highest-scoring** stocks
-3. Allocates **equal weight** (~$100K each with $1M capital)
+3. Allocates **equal weight** (~$100K each with 1M capital)
 4. Generates **buy/sell orders** for the next trading day
 
 ### Key Rule: TopkDropout (topk=10, n_drop=1)
