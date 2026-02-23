@@ -1,0 +1,15 @@
+graft quantaalpha
+graft ingest
+graft configs
+recursive-include quantaalpha *.py *.yaml *.json *.txt
+prune data
+prune hf_data
+prune git_ignore_folder
+prune mlruns
+prune workspace
+prune pickle_cache
+prune frontend-v2/node_modules
+prune home
+prune log
+global-exclude *.h5 *.parquet *.pkl *.pickle *.egg-info
+global-exclude __pycache__ *.pyc *.pyo

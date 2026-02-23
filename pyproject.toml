@@ -40,7 +40,7 @@ homepage = "https://github.com/QuantaAlpha/quantaalpha"
 issue = "https://github.com/QuantaAlpha/quantaalpha/issues"
 
 [tool.setuptools]
-packages = {find = {where = ["."]}}
+packages = {find = {where = ["."], exclude = ["data*", "hf_data*", "git_ignore_folder*", "mlruns*", "workspace*", "pickle_cache*", "frontend-v2*", "home*", "log*", "scripts*", "tests*", "docs*", "configs*"]}}
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
