@@ -1,13 +1,14 @@
 ######################################################################
 # QuantaAlpha Live Trading Configuration
-# Strategy: US Equities, TopkDropout (topk=30, n_drop=2)
-# Optimal config backtest: ARR=76.0%, Calmar=4.94, MDD=-15.4%
-#   (test 2022-2025, excess vs SPY, multi-period label, topk=30, n_drop=2)
+# Strategy: US Equities, TopkDropout (topk=20, n_drop=2)
+# Model: Union 89f (baseline 45 + multi-LLM 44 nonzero-importance)
+# Backtest: ARR=18.5%, Calmar=1.02, MDD=-18.1%, IC=0.034
+#   (test 2022-2025, excess vs SPY, topk=20, n_drop=2)
 ######################################################################
 
 model:
   # Saved LightGBM booster + feature list + training metadata
-  meta_path: "data/models/us_prod_20260222_132421_meta.json"
+  meta_path: "data/models/us_union89_prod_meta.json"
 
 data:
   h5_path: "git_ignore_folder/factor_implementation_source_data_us/daily_pv.h5"
@@ -15,7 +16,7 @@ data:
   lookback_days: 300
 
 portfolio:
-  topk: 30
+  topk: 20
   n_drop: 2
   capital: 1_000_000      # $1M paper capital
   min_position_size: 1    # minimum shares per holding

@@ -986,7 +986,8 @@ class BacktestRunner:
                 except Exception as filter_err:
                     logger.warning(f"Price filter failed: {filter_err}")
                 
-                portfolio_metric_dict, indicator_dict = qlib_backtest(
+                bench_sym = backtest_config.get('benchmark')
+                _bt_kwargs = dict(
                     executor={
                         "class": "SimulatorExecutor",
                         "module_path": "qlib.backtest.executor",
@@ -1009,12 +1010,21 @@ class BacktestRunner:
                     start_time=backtest_config['start_time'],
                     end_time=backtest_config['end_time'],
                     account=backtest_config['account'],
-                    benchmark=backtest_config['benchmark'],
+                    benchmark=bench_sym,
                     exchange_kwargs={
                         "codes": stock_list,
                         **backtest_config['exchange_kwargs']
                     }
                 )
+                try:
+                    portfolio_metric_dict, indicator_dict = qlib_backtest(**_bt_kwargs)
+                except ValueError as ve:
+                    if "benchmark" in str(ve).lower() and bench_sym:
+                        logger.warning(f"Benchmark '%s' not found, retrying without benchmark", bench_sym)
+                        del _bt_kwargs['benchmark']
+                        portfolio_metric_dict, indicator_dict = qlib_backtest(**_bt_kwargs)
+                    else:
+                        raise
                 
                 print(f"  Portfolio backtest done ({time.time()-bt_start:.1f}s)")
                 # Extract portfolio metrics
