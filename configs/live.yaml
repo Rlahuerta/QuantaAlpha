@@ -16,8 +16,8 @@ data:
   lookback_days: 300
 
 portfolio:
-  topk: 20
-  n_drop: 2
+  topk: 10
+  n_drop: 1
   capital: 1_000_000      # $1M paper capital
   min_position_size: 1    # minimum shares per holding
   max_position_pct: 0.05  # max single position = 5% of capital
