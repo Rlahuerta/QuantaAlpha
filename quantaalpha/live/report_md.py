@@ -420,11 +420,27 @@ def generate_chain_report(
             sells_sorted = sorted(sells, key=_order_val, reverse=True)
             buys_sorted  = sorted(buys,  key=_order_val, reverse=True)
 
-            # Slots: all sells + fill remaining slots with buys (up to topk)
+            # Pre-simulate sells → buys to classify each buy as feasible/infeasible.
+            # This prevents the waterfall from ever showing negative cash; buys that
+            # would overdraw are shown as a collapsed note after the table.
+            sim_cash = prev_cash
+            for o in sells_sorted:
+                sim_cash += _order_val(o)
+            feasible_buys: list = []
+            infeasible_buys: list = []
+            for o in buys_sorted:
+                val = _order_val(o)
+                if sim_cash >= val:
+                    feasible_buys.append(o)
+                    sim_cash -= val
+                else:
+                    infeasible_buys.append(o)
+
+            # Slots: all sells + fill remaining slots with feasible buys (up to topk)
             sell_slots = len(sells_sorted)
             buy_slots  = max(0, topk - sell_slots)
-            buys_show  = buys_sorted[:buy_slots]
-            buys_hide  = buys_sorted[buy_slots:]
+            buys_show  = feasible_buys[:buy_slots]
+            buys_hide  = feasible_buys[buy_slots:]
 
             A("| Flow | Ticker | Shares | Price | Trade Value | Cash Balance |")
             A("|------|--------|--------|-------|-------------|--------------|")
@@ -464,7 +480,7 @@ def generate_chain_report(
                 A(f"| {icon} | {t} | +{sh:,} | {_usd(px)} | "
                   f"−{_usd(val)} | {_usd(running_cash)}{_cash_flag(running_cash)} |")
 
-            # Collapsed row for hidden buys
+            # Collapsed row for hidden feasible buys
             if buys_hide:
                 hidden_val = sum(_order_val(o) for o in buys_hide)
                 hidden_tickers = ", ".join(o["ticker"] for o in buys_hide)
@@ -478,11 +494,21 @@ def generate_chain_report(
               f"**{_usd(running_cash)}**{closing_flag} |")
             A("")
 
-            # Warning banner when cash is negative or below floor
+            # Note about infeasible buy orders (skipped to prevent negative cash)
+            if infeasible_buys:
+                total_skipped = sum(_order_val(o) for o in infeasible_buys)
+                sk_tickers = ", ".join(o["ticker"] for o in infeasible_buys[:8])
+                if len(infeasible_buys) > 8:
+                    sk_tickers += f" *(+{len(infeasible_buys) - 8} more)*"
+                A(f"> ⛔ **{len(infeasible_buys)} buy order(s) skipped** — insufficient cash "
+                  f"({_usd(total_skipped)} needed). Skipped: {sk_tickers}")
+                A("")
+
+            # Warning banner when cash is still below floor after feasible trades
             cash_floor = min_cash_pct * account if account else 0.0
             if running_cash < 0:
-                A(f"> ⚠️ **Cash alert**: Closing cash ({_usd(running_cash)}) is **negative**. "
-                  f"These orders may have been infeasible — please verify account reconciliation.")
+                A(f"> ⚠️ **Cash alert**: Closing cash ({_usd(running_cash)}) is **negative** "
+                  f"— please verify account reconciliation.")
                 A("")
             elif cash_floor > 0 and running_cash < cash_floor:
                 A(f"> ⚠️ **Cash reserve below {min_cash_pct*100:.0f}% floor**: "

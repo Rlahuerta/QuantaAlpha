@@ -320,8 +320,8 @@ def test_cash_reserve_warning_when_below_floor():
 
 
 def test_cash_negative_warning_banner():
-    """When waterfall produces negative cash, a ⚠️ alert banner appears."""
-    # $1k opening cash, one $50k buy → -$49k
+    """When a buy would overdraw, it is skipped and a ⛔ note appears."""
+    # $1k opening cash, one $50k buy → infeasible → skipped
     day = {
         "date": "2026-03-01",
         "account_value": 1_000_000.0,
@@ -334,10 +334,12 @@ def test_cash_negative_warning_banner():
         "prices": {"BIGBUY": 50.0},
         "position_pnl": {},
     }
-    # Start with only $1,000 in cash
+    # Start with only $1,000 in cash — buy costs $50k, infeasible
     md = generate_chain_report([day], initial_capital=1_000.0, topk=10)
-    assert "Cash alert" in md
-    assert "negative" in md
+    assert "skipped" in md
+    assert "insufficient cash" in md
+    # Cash must NOT go negative
+    assert "$-" not in md
 
 
 def test_cash_floor_in_strategy_params():
