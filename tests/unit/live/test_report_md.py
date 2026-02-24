@@ -174,6 +174,113 @@ def test_sell_before_buy_order():
     assert sell_idx < buy_idx
 
 
+# ─── topk row-limiting ────────────────────────────────────────────────────────
+
+def _make_day_with_n_buys(n: int) -> dict:
+    """Day with n BUY NEW orders of equal value."""
+    orders = [
+        {"ticker": f"T{i:02d}", "shares": 100, "action": "buy",
+         "price": 100.0, "reason": "new"}
+        for i in range(n)
+    ]
+    return {
+        "date": "2026-03-01",
+        "account_value": 1_000_000.0 - n * 10_000,
+        "daily_pnl": 0.0,
+        "orders": orders,
+        "target_positions": {f"T{i:02d}": 100 for i in range(n)},
+        "previous_positions": {},
+        "prices": {f"T{i:02d}": 100.0 for i in range(n)},
+        "position_pnl": {},
+    }
+
+
+def test_topk_limits_buy_rows_displayed():
+    """With topk=3 and 10 buys, only 3 individual rows + 1 collapsed row shown."""
+    day = _make_day_with_n_buys(10)
+    md = generate_chain_report([day], initial_capital=1_000_000.0, topk=3)
+    # 3 visible BUY rows
+    assert md.count("🟢 BUY NEW") == 3
+    # 1 collapsed row for the remaining 7
+    assert "7 more buys" in md
+
+
+def test_topk_collapsed_row_shows_correct_cash():
+    """Cash arithmetic must include hidden orders in the collapsed row."""
+    day = _make_day_with_n_buys(5)  # 5 × $10,000 = $50,000 total buys
+    md = generate_chain_report([day], initial_capital=1_000_000.0, topk=2)
+    # Opening $1M, show 2 buys (-$10k each = $980k), collapse 3 (-$30k = $950k)
+    assert "$950,000.00" in md   # closing cash after all 5 buys
+
+
+def test_topk_no_collapse_when_orders_lte_topk():
+    """No collapsed row if orders ≤ topk."""
+    day = _make_day_with_n_buys(3)
+    md = generate_chain_report([day], initial_capital=1_000_000.0, topk=5)
+    assert "more buys" not in md
+    assert md.count("🟢 BUY NEW") == 3
+
+
+def test_topk_sells_always_shown():
+    """All SELL orders are always shown regardless of topk."""
+    day = {
+        **_make_day_with_n_buys(5),
+        "orders": [
+            {"ticker": "OLD1", "shares": -100, "action": "sell", "price": 200.0},
+            {"ticker": "OLD2", "shares": -50,  "action": "sell", "price": 150.0},
+        ] + [
+            {"ticker": f"T{i:02d}", "shares": 100, "action": "buy", "price": 100.0}
+            for i in range(8)
+        ],
+        "previous_positions": {"OLD1": 100, "OLD2": 50},
+    }
+    md = generate_chain_report([day], initial_capital=1_000_000.0, topk=3)
+    # Both sells must appear
+    assert "OLD1" in md
+    assert "OLD2" in md
+    assert md.count("SELL ALL") == 2
+
+
+def test_topk_holds_collapsed():
+    """Hold list collapses excess tickers beyond topk."""
+    holds = {f"H{i:02d}": i * 10 for i in range(20)}
+    day = {
+        "date": "2026-03-01",
+        "account_value": 1_000_000.0,
+        "daily_pnl": 0.0,
+        "orders": [],
+        "target_positions": holds,
+        "previous_positions": holds,
+        "prices": {k: 100.0 for k in holds},
+        "position_pnl": {},
+    }
+    md = generate_chain_report([day], initial_capital=1_000_000.0, topk=5)
+    assert "more:" in md   # collapsed suffix
+    assert "**Hold** (20 positions)" in md
+
+
+def test_topk_pnl_table_collapses_middle():
+    """P&L table with > topk rows shows worst/best N/2 + collapsed middle."""
+    pos_pnl = {
+        f"S{i}": {"shares": 100, "price_start": 100.0,
+                  "price_end": 100.0 - i, "pnl": -i * 100.0}
+        for i in range(1, 13)   # 12 positions, topk=4 → show 2 + middle(8) + 2
+    }
+    day = {
+        "date": "2026-03-01",
+        "account_value": 990_000.0,
+        "daily_pnl": -sum(i * 100 for i in range(1, 13)),
+        "orders": [],
+        "target_positions": {},
+        "previous_positions": {},
+        "prices": {},
+        "position_pnl": pos_pnl,
+    }
+    md = generate_chain_report([day], initial_capital=1_000_000.0, topk=4)
+    assert "more)" in md   # collapsed middle row
+
+
+
 # ─── P&L attribution section ──────────────────────────────────────────────────
 
 def test_position_pnl_table_present():

@@ -360,15 +360,31 @@ def generate_chain_report(
             A("| Ticker | Shares | Open | Close | Change | Day P&L |")
             A("|--------|--------|------|-------|--------|---------|")
             sorted_pnl = sorted(pos_pnl.items(), key=lambda x: x[1].get("pnl", 0))
-            for ticker, info in sorted_pnl:
-                p0 = float(info.get("price_start") or 0)
-                p1 = float(info.get("price_end") or 0)
-                chg = (p1 - p0) / p0 if p0 else 0.0
+            # Show worst N/2 losers + best N/2 winners, collapse middle
+            half = max(1, topk // 2)
+            losers  = sorted_pnl[:half]
+            winners = sorted_pnl[-half:]
+            middle  = sorted_pnl[half:-half] if len(sorted_pnl) > topk else []
+
+            def _pnl_row(ticker: str, info: Dict) -> str:
+                p0   = float(info.get("price_start") or 0)
+                p1   = float(info.get("price_end")   or 0)
+                chg  = (p1 - p0) / p0 if p0 else 0.0
                 pval = float(info.get("pnl") or 0)
                 icon = "📈" if pval > 0 else "📉" if pval < 0 else "→"
-                A(f"| {icon} {ticker} | {info.get('shares',0):,} | "
-                  f"{_usd(p0)} | {_usd(p1)} | "
-                  f"{_sign(chg)}{chg*100:.2f}% | {_sign(pval)}{_usd(pval)} |")
+                return (f"| {icon} {ticker} | {info.get('shares',0):,} | "
+                        f"{_usd(p0)} | {_usd(p1)} | "
+                        f"{_sign(chg)}{chg*100:.2f}% | {_sign(pval)}{_usd(pval)} |")
+
+            for ticker, info in losers:
+                A(_pnl_row(ticker, info))
+            if middle:
+                mid_pnl = sum(float(v.get("pnl", 0)) for _, v in middle)
+                mid_tks = ", ".join(t for t, _ in middle)
+                A(f"| *({len(middle)} more)* | *{mid_tks}* | — | — | — | "
+                  f"{_sign(mid_pnl)}{_usd(mid_pnl)} |")
+            for ticker, info in winners:
+                A(_pnl_row(ticker, info))
             A(f"| | | | | **TOTAL** | **{_sign(daily_pnl)}{_usd(daily_pnl)}** |")
             A("")
         elif daily_pnl and prev_pos:
@@ -388,27 +404,43 @@ def generate_chain_report(
         if orders:
             A("### 💸 Orders & Cash Flow")
             A("")
+
+            # Sort sells largest-first, buys largest-first (by value)
+            def _order_val(o: Dict) -> float:
+                t = o.get("ticker", "")
+                sh = abs(int(o.get("shares") or 0))
+                px = float(o.get("price") or prices.get(t, 0))
+                return sh * px
+
+            sells_sorted = sorted(sells, key=_order_val, reverse=True)
+            buys_sorted  = sorted(buys,  key=_order_val, reverse=True)
+
+            # Slots: all sells + fill remaining slots with buys (up to topk)
+            sell_slots = len(sells_sorted)
+            buy_slots  = max(0, topk - sell_slots)
+            buys_show  = buys_sorted[:buy_slots]
+            buys_hide  = buys_sorted[buy_slots:]
+
             A("| Flow | Ticker | Shares | Price | Trade Value | Cash Balance |")
             A("|------|--------|--------|-------|-------------|--------------|")
 
             running_cash = prev_cash
             A(f"| **Opening Cash** | — | — | — | — | **{_usd(running_cash)}** |")
 
-            # SELLs first (generate cash)
-            for o in sells:
+            # SELLs first (generate cash) — always show all sells
+            for o in sells_sorted:
                 t = o["ticker"]
                 sh = abs(int(o.get("shares") or 0))
                 px = float(o.get("price") or prices.get(t, 0))
                 val = sh * px
                 running_cash += val
-                prev_sh = prev_pos.get(t, sh)
                 in_target = t in target
                 icon = "🟡 REDUCE" if in_target else "🔴 SELL ALL"
                 A(f"| {icon} | {t} | −{sh:,} | {_usd(px)} | "
                   f"+{_usd(val)} | {_usd(running_cash)} |")
 
-            # BUYs (consume cash)
-            for o in buys:
+            # BUYs (consume cash) — show up to buy_slots
+            for o in buys_show:
                 t = o["ticker"]
                 sh = abs(int(o.get("shares") or 0))
                 px = float(o.get("price") or prices.get(t, 0))
@@ -418,6 +450,15 @@ def generate_chain_report(
                 icon = "🟢 BUY NEW" if is_new else "🔵 ADD"
                 A(f"| {icon} | {t} | +{sh:,} | {_usd(px)} | "
                   f"−{_usd(val)} | {_usd(running_cash)} |")
+
+            # Collapsed row for hidden buys
+            if buys_hide:
+                hidden_val = sum(_order_val(o) for o in buys_hide)
+                hidden_tickers = ", ".join(o["ticker"] for o in buys_hide)
+                running_cash -= hidden_val
+                A(f"| *(+{len(buys_hide)} more buys)* | "
+                  f"*{hidden_tickers}* | — | — | "
+                  f"−{_usd(hidden_val)} | {_usd(running_cash)} |")
 
             A(f"| **Closing Cash** | — | — | — | — | **{_usd(running_cash)}** |")
             A("")
@@ -431,8 +472,18 @@ def generate_chain_report(
             A("")
 
         if holds:
-            hold_str = "  ".join(f"`{t}`" for t in sorted(holds))
-            A(f"⏸ **Hold** ({len(holds)} positions): {hold_str}")
+            # Show only top-topk holds (by position value), collapse rest
+            holds_sorted = sorted(
+                holds,
+                key=lambda t: target.get(t, 0) * prices.get(t, 0),
+                reverse=True,
+            )
+            hold_show = holds_sorted[:topk]
+            hold_hide = holds_sorted[topk:]
+            hold_str = "  ".join(f"`{t}`" for t in hold_show)
+            suffix = (f"  *(+{len(hold_hide)} more: "
+                      + ", ".join(hold_hide) + ")*") if hold_hide else ""
+            A(f"⏸ **Hold** ({len(holds)} positions): {hold_str}{suffix}")
             A("")
 
         # ── End-of-day snapshot ───────────────────────────────────────
