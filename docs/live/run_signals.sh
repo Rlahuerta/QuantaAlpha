@@ -6,6 +6,7 @@
 #   bash docs/live/run_signals.sh              # full pipeline (ingest + signals)
 #   bash docs/live/run_signals.sh --signals    # signals only (skip data update)
 #   bash docs/live/run_signals.sh --ingest     # data update only (skip signals)
+#   bash docs/live/run_signals.sh --report     # regenerate today's report only
 #
 # This script:
 #   1. Activates the quantaalpha-ollama conda environment
@@ -14,6 +15,7 @@
 #   4. Compares scores against current holdings (data/live/positions.json)
 #   5. Produces buy/sell orders via TopkDropout rebalancing
 #   6. Saves pending orders to data/live/pending_orders_{date}.json
+#   7. Generates a Markdown report to data/live/reports/report_{date}.md
 #
 # Run after US market close (recommended: 16:45–17:30 ET).
 # ======================================================================
@@ -32,15 +34,17 @@ ORDERS_DIR="${REPO_ROOT}/data/live"
 # ── Parse flags ──────────────────────────────────────────────────────
 DO_INGEST=true
 DO_SIGNALS=true
+DO_REPORT_ONLY=false
 for arg in "$@"; do
     case "$arg" in
         --signals)  DO_INGEST=false ;;
         --ingest)   DO_SIGNALS=false ;;
+        --report)   DO_INGEST=false; DO_SIGNALS=false; DO_REPORT_ONLY=true ;;
         --help|-h)
-            head -15 "$0" | grep "^#" | sed 's/^# \?//'
+            head -18 "$0" | grep "^#" | sed 's/^# \?//'
             exit 0 ;;
         *)
-            echo "Unknown flag: $arg (use --ingest, --signals, or no flag for both)"
+            echo "Unknown flag: $arg (use --ingest, --signals, --report, or no flag for full pipeline)"
             exit 1 ;;
     esac
 done
@@ -135,7 +139,6 @@ import sys, json, yaml, logging, os
 logging.basicConfig(level=logging.WARNING, format='%(asctime)s %(levelname)s %(message)s')
 
 from quantaalpha.live.scheduler import TradingScheduler
-from quantaalpha.live.report import render_report
 
 scheduler = TradingScheduler('$CONFIG')
 
@@ -163,15 +166,56 @@ if result.get('kill_switch'):
     print('  No orders generated. Review risk limits.')
     sys.exit(2)
 
-# Add orders file path for display
-from datetime import date
-result['orders_file'] = f'$ORDERS_DIR/pending_orders_{date.today().isoformat()}.json'
+# scheduler.run_signal() already saved the Markdown report.
+# Print it to stdout so the terminal shows the full report.
+report_file = result.get('report_file')
+if report_file:
+    from pathlib import Path
+    md_path = Path(report_file)
+    if md_path.exists():
+        print(md_path.read_text())
+        print(f'  (Report saved: {report_file})', file=sys.stderr)
+    else:
+        # Fallback: generate inline if file not written
+        from quantaalpha.live.position_tracker import PositionTracker
+        import yaml as _y
+        with open('$CONFIG') as _f:
+            _cfg = _y.safe_load(_f)
+        _out = _cfg.get('output', {})
+        tracker = PositionTracker(
+            positions_file=_out.get('positions_file', 'data/live/positions.json'),
+            pnl_dir=_out.get('pnl_dir', 'data/live/pnl'),
+        )
+        ledger = tracker.load_ledger(last_n=10)
+        from quantaalpha.live.report_md import generate_report
+        print(generate_report(result, ledger=ledger))
+"
+    echo ""
+fi
 
-# Load trading ledger for history section
+# ══════════════════════════════════════════════════════════════════════
+# STEP 3 (optional): Regenerate report from existing orders file
+# ══════════════════════════════════════════════════════════════════════
+if [[ "$DO_REPORT_ONLY" == "true" ]]; then
+    echo "── Regenerating report from existing orders ──"
+    run_conda python -c "
+import json, sys, glob
+from pathlib import Path
+
+# Find the most recent orders file
+files = sorted(glob.glob('$ORDERS_DIR/pending_orders_*.json'))
+if not files:
+    print('ERROR: No pending_orders_*.json found in $ORDERS_DIR', file=sys.stderr)
+    sys.exit(1)
+orders_path = Path(files[-1])
+print(f'  Using: {orders_path}', file=sys.stderr)
+data = json.loads(orders_path.read_text())
+
+# Load ledger
+import yaml
 from quantaalpha.live.position_tracker import PositionTracker
-import yaml as _y
 with open('$CONFIG') as _f:
-    _cfg = _y.safe_load(_f)
+    _cfg = yaml.safe_load(_f)
 _out = _cfg.get('output', {})
 tracker = PositionTracker(
     positions_file=_out.get('positions_file', 'data/live/positions.json'),
@@ -179,8 +223,10 @@ tracker = PositionTracker(
 )
 ledger = tracker.load_ledger(last_n=10)
 
-# Render the actionable trading report
-render_report(result, ledger=ledger)
+from quantaalpha.live.report_md import generate_report, save_report
+report_path = save_report(data, ledger=ledger, output_dir=Path('$ORDERS_DIR/reports'))
+print(report_path.read_text())
+print(f'  (Report saved: {report_path})', file=sys.stderr)
 "
     echo ""
 fi

@@ -225,8 +225,24 @@ class TradingScheduler:
             ],
             "target_positions": result.target_portfolio,
         }
+        order_data["orders_file"] = str(orders_file)
         orders_file.write_text(json.dumps(order_data, indent=2))
         logger.info("Orders saved: %s (%d orders)", orders_file, len(result.orders))
+
+        # Save Markdown report (one file per day for audit trail)
+        try:
+            from quantaalpha.live.report_md import save_report
+            ledger_for_report = tracker.load_ledger(last_n=10)
+            report_path = save_report(
+                order_data,
+                ledger=ledger_for_report,
+                output_dir=orders_dir / "reports",
+            )
+            logger.info("Markdown report saved: %s", report_path)
+            order_data["report_file"] = str(report_path)
+        except Exception as exc:
+            logger.warning("Could not save Markdown report: %s", exc)
+
         self._last_orders = order_data
         return order_data
 
