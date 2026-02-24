@@ -134,6 +134,29 @@ class PortfolioConstructor:
         to_add = candidates[: max(0, self.topk - len(current_target))]
 
         target = sorted(current_target | set(to_add), key=lambda t: scores.get(t, 0.0), reverse=True)
+
+        # Bug fix #4: respect n_drop as max total exits per day.
+        # If target[:topk] would silently drop positions beyond n_drop
+        # (e.g. topk decreased), keep extra positions temporarily.
+        if len(target) > self.topk:
+            would_be_dropped = set(current_holdings) - set(target[: self.topk])
+            if len(would_be_dropped) > self.n_drop:
+                # Only drop n_drop; keep rest even if exceeds topk temporarily
+                excess_kept = sorted(
+                    would_be_dropped - set(to_drop),
+                    key=lambda t: scores.get(t, float("-inf")),
+                    reverse=True,
+                )
+                max_extra_drops = max(0, self.n_drop - len(to_drop))
+                extra_drops = excess_kept[len(excess_kept) - max_extra_drops :] if max_extra_drops else []
+                to_drop = to_drop + extra_drops
+                # Rebuild target keeping everything except actual drops
+                kept = set(target) - set(to_drop)
+                target = sorted(kept, key=lambda t: scores.get(t, 0.0), reverse=True)
+                log.info("TopkDropout: holding %d positions (> topk=%d) to respect n_drop=%d",
+                         len(target), self.topk, self.n_drop)
+                return target, to_drop
+
         return target[: self.topk], to_drop
 
     def _apply_liquidity_filter(

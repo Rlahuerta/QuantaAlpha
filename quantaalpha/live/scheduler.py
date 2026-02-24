@@ -132,14 +132,15 @@ class TradingScheduler:
 
         # 5. KillSwitch — halt if daily loss exceeds limit
         daily_pnl = daily_pnl_dict.get("daily_pnl", 0.0)
+        account_after_pnl = prev_account_value + daily_pnl
         if current_positions and kill_switch.is_triggered(daily_pnl):
             logger.warning("Kill-switch active — skipping order generation")
             # Still record the bad day
-            account_value = prev_account_value + daily_pnl
             tracker.record_day(
                 positions=current_positions,
-                account_value=account_value,
+                account_value=account_after_pnl,
                 daily_pnl_dict=daily_pnl_dict,
+                prices=prices_today,
             )
             return {"kill_switch": True, "daily_pnl": daily_pnl}
 
@@ -158,13 +159,16 @@ class TradingScheduler:
         )
 
         # 7. Record day — use target portfolio as new positions (paper = instant fill)
+        # account_value = prev + daily_pnl (exact for paper trading: rebalance at
+        # current prices is zero-sum).  Cash is derived as residual inside record_day.
         new_positions = result.target_portfolio
-        account_value = prev_account_value + daily_pnl
-        tracker.record_day(
+        day_state = tracker.record_day(
             positions=new_positions,
-            account_value=round(account_value, 2),
+            account_value=account_after_pnl,
             daily_pnl_dict=daily_pnl_dict,
+            prices=prices_today,
         )
+        account_value = day_state["account_value"]
 
         # 8. Persist orders
         orders_dir = Path(out_cfg.get("orders_dir", "data/live"))

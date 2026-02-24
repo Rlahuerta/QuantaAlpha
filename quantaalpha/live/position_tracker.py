@@ -162,30 +162,66 @@ class PositionTracker:
             "num_positions": counted,
         }
 
+    def mark_to_market(
+        self,
+        positions: Dict[str, int],
+        prices: Dict[str, float],
+    ) -> float:
+        """Compute portfolio value as sum(shares × price) for all positions."""
+        total = 0.0
+        for ticker, shares in positions.items():
+            price = prices.get(ticker, 0.0)
+            if price > 0:
+                total += shares * price
+        return round(total, 2)
+
     def record_day(
         self,
         positions: Dict[str, int],
         account_value: float,
         daily_pnl_dict: Dict,
         as_of: Optional[date] = None,
+        prices: Optional[Dict[str, float]] = None,
     ) -> Dict:
         """Build and persist the daily snapshot.
 
         Cumulative P&L is accumulated from the previous day's state.
+        Idempotent: if already ran today, overwrites without re-accumulating.
+
+        For paper trading, ``account_value`` should already include daily P&L
+        (i.e. ``prev_account + daily_pnl``).  Rebalancing at current prices is
+        zero-sum, so this drift approach is exact.
+
+        When *prices* is provided, ``cash`` is derived as
+        ``account_value − mark_to_market`` so both invested and uninvested
+        capital are tracked.
 
         Returns the full state dict written to disk.
         """
         today = (as_of or date.today()).isoformat()
         prev_state = self.load_state()
 
-        # Accumulate cumulative return
-        prev_cum = prev_state.get("pnl", {}).get("cumulative_excess_return", 0.0)
-        prev_cum_pnl = prev_state.get("pnl", {}).get("cumulative_pnl", 0.0)
+        # Bug fix #2: compute cash as residual (positions may not use 100% capital)
+        cash = 0.0
+        if prices and positions:
+            mtm = self.mark_to_market(positions, prices)
+            cash = round(account_value - mtm, 2)
+
+        # Bug fix #1: idempotency — detect same-day re-run
+        prev_date = prev_state.get("date")
+        if prev_date == today:
+            logger.info("Same-day re-run detected for %s — overwriting without re-accumulating", today)
+            prev_cum = prev_state.get("pnl", {}).get("_prev_day_cumulative_excess_return", 0.0)
+            prev_cum_pnl = prev_state.get("pnl", {}).get("_prev_day_cumulative_pnl", 0.0)
+        else:
+            prev_cum = prev_state.get("pnl", {}).get("cumulative_excess_return", 0.0)
+            prev_cum_pnl = prev_state.get("pnl", {}).get("cumulative_pnl", 0.0)
 
         state = {
             "date": today,
             "positions": positions,
             "account_value": round(account_value, 2),
+            "cash": cash,
             "pnl": {
                 "daily_pnl": daily_pnl_dict.get("daily_pnl", 0.0),
                 "cumulative_pnl": round(prev_cum_pnl + daily_pnl_dict.get("daily_pnl", 0.0), 2),
@@ -194,7 +230,11 @@ class PositionTracker:
                 "cumulative_excess_return": round(
                     prev_cum + daily_pnl_dict.get("daily_excess_return", 0.0), 6
                 ),
-                "num_positions": daily_pnl_dict.get("num_positions", len(positions)),
+                # Bug fix #3: actual position count, not price-available count
+                "num_positions": len(positions),
+                # Store previous-day base for idempotent re-runs
+                "_prev_day_cumulative_pnl": prev_cum_pnl,
+                "_prev_day_cumulative_excess_return": prev_cum,
             },
         }
 

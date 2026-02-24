@@ -256,8 +256,16 @@ class TestTradingSchedulerRunSignal:
         """Two consecutive runs accumulate cumulative P&L."""
         from quantaalpha.live.scheduler import TradingScheduler
         import quantaalpha.live.scheduler as sched_mod
+        import pandas as pd
         s = TradingScheduler(live_config)
         mock_sg = self._make_mock_sg()
+        # Provide a minimal H5 window so prices_today is populated
+        idx = pd.MultiIndex.from_tuples(
+            [("2026-02-24", "AAPL"), ("2026-02-23", "AAPL")],
+            names=["datetime", "instrument"],
+        )
+        window_df = pd.DataFrame({"$close": [150.0, 148.0]}, index=idx)
+        mock_sg._load_h5_window.return_value = window_df
         mock_constructor = MagicMock()
         result = MagicMock()
         result.orders = []
