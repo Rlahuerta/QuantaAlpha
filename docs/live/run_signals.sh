@@ -172,11 +172,11 @@ if result.get('kill_switch'):
 
 # Generate the chain-of-blocks trading journal for all history
 from quantaalpha.live.report_md import save_chain_report
-import yaml as _y
-with open('$CONFIG') as _f:
-    _cfg = _y.safe_load(_f)
-init_cap = float(_cfg.get('capital', 1_000_000))
-journal_path = save_chain_report('$ORDERS_DIR', topk=$TOPK, initial_capital=init_cap)
+journal_path = save_chain_report(
+    '$ORDERS_DIR',
+    topk=$TOPK,
+    config_path='$CONFIG',
+)
 print(journal_path.read_text())
 print(f'  (Journal saved: {journal_path})', file=sys.stderr)
 "
@@ -189,14 +189,12 @@ fi
 if [[ "$DO_REPORT_ONLY" == "true" ]]; then
     echo "── Regenerating trading journal from all order history ──"
     run_conda python -c "
-import yaml
-from pathlib import Path
 from quantaalpha.live.report_md import save_chain_report
-
-with open('$CONFIG') as _f:
-    _cfg = yaml.safe_load(_f)
-init_cap = float(_cfg.get('capital', 1_000_000))
-journal_path = save_chain_report('$ORDERS_DIR', topk=$TOPK, initial_capital=init_cap)
+journal_path = save_chain_report(
+    '$ORDERS_DIR',
+    topk=$TOPK,
+    config_path='$CONFIG',
+)
 print(journal_path.read_text())
 print(f'  (Journal saved: {journal_path})', file=sys.stderr)
 "

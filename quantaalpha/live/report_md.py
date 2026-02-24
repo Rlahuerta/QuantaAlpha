@@ -23,7 +23,6 @@ Usage::
 
 from __future__ import annotations
 
-import glob
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,6 +51,96 @@ def _action_icon(action: str, is_new: bool, is_full_exit: bool) -> str:
     if action == "buy":
         return "🟢 BUY NEW" if is_new else "🔵 ADD"
     return "⏸ HOLD"
+
+
+# ── Algorithm info loader ─────────────────────────────────────────────
+
+def load_algo_info(config_path: str | Path) -> Dict[str, Any]:
+    """Load algorithm profile from live.yaml + linked model meta + backtest metrics.
+
+    Returns a flat dict with keys consumed by :func:`generate_chain_report`:
+    ``model_stem``, ``num_features``, ``factor_json``, ``topk``, ``n_drop``,
+    ``capital``, ``max_position_pct``, ``market``, ``benchmark``,
+    ``train_range``, ``test_range``, ``arr``, ``ir``, ``mdd``, ``calmar``,
+    ``ic``, ``rank_ic``, ``metrics_source``.
+    Returns an empty dict if anything fails (report degrades gracefully).
+    """
+    try:
+        import yaml  # soft import — not available in all test envs
+    except ImportError:
+        return {}
+
+    config_path = Path(config_path)
+    if not config_path.exists():
+        return {}
+
+    try:
+        with config_path.open() as fh:
+            cfg = yaml.safe_load(fh)
+    except Exception:
+        return {}
+
+    info: Dict[str, Any] = {}
+    portfolio = cfg.get("portfolio", {})
+    info["topk"] = portfolio.get("topk", 10)
+    info["n_drop"] = portfolio.get("n_drop", 1)
+    info["capital"] = portfolio.get("capital", 1_000_000)
+    info["max_position_pct"] = portfolio.get("max_position_pct", 0.10)
+
+    # Resolve paths relative to config file's directory
+    base = config_path.parent
+
+    meta_path = cfg.get("model", {}).get("meta_path")
+    if meta_path:
+        meta_file = (base / meta_path) if not Path(meta_path).is_absolute() else Path(meta_path)
+        # also try relative to repo root
+        if not meta_file.exists():
+            meta_file = Path(meta_path)
+        if meta_file.exists():
+            try:
+                meta = json.loads(meta_file.read_text())
+                info["model_stem"] = meta.get("model_stem", "")
+                info["num_features"] = meta.get("num_features", 0)
+                fj = meta.get("factor_json", "")
+                # factor_json may be a list (multiple libraries)
+                if isinstance(fj, list):
+                    fj = fj[0] if fj else ""
+                info["factor_json"] = Path(fj).name if fj else ""
+
+                # Derive sibling backtest-metrics file
+                stem = meta.get("model_stem", "")
+                metrics_file = meta_file.parent / f"{stem}_backtest_metrics.json"
+                # fall back to results dir convention
+                if not metrics_file.exists():
+                    metrics_file = (
+                        base / "data/results/backtest_v2_results"
+                        / f"{stem}_backtest_metrics.json"
+                    )
+                if not metrics_file.exists():
+                    metrics_file = Path(
+                        f"data/results/backtest_v2_results/{stem}_backtest_metrics.json"
+                    )
+                if metrics_file.exists():
+                    bm = json.loads(metrics_file.read_text())
+                    m = bm.get("metrics", {})
+                    c = bm.get("config", {})
+                    info.update({
+                        "arr": m.get("annualized_return"),
+                        "ir": m.get("information_ratio"),
+                        "mdd": m.get("max_drawdown"),
+                        "calmar": m.get("calmar_ratio"),
+                        "ic": m.get("IC"),
+                        "rank_ic": m.get("Rank IC"),
+                        "market": c.get("market", ""),
+                        "benchmark": c.get("benchmark", "SPY"),
+                        "train_range": c.get("data_range", ""),
+                        "test_range": c.get("test_range", ""),
+                        "metrics_source": metrics_file.name,
+                    })
+            except Exception:
+                pass
+
+    return info
 
 
 # ── Order file loader ─────────────────────────────────────────────────
@@ -98,6 +187,7 @@ def generate_chain_report(
     *,
     initial_capital: float = 1_000_000.0,
     topk: int = 10,
+    algo_info: Optional[Dict[str, Any]] = None,
     generated_at: Optional[datetime] = None,
 ) -> str:
     """Generate a day-by-day chained trading journal.
@@ -111,6 +201,9 @@ def generate_chain_report(
         Starting cash (used for the initial block).
     topk:
         Number of algorithm picks to show in the current-day section.
+    algo_info:
+        Optional dict returned by :func:`load_algo_info`.  When present,
+        the initial block includes an algorithm profile with backtest metrics.
     generated_at:
         Footer timestamp (default: UTC now).
 
@@ -120,15 +213,18 @@ def generate_chain_report(
         Full Markdown text.
     """
     ts = generated_at or datetime.now(timezone.utc)
+    ai = algo_info or {}
     lines: List[str] = []
     A = lines.append
 
     # ── Title & header ────────────────────────────────────────────────
+    model_name = ai.get("model_stem") or "QuantaAlpha"
     A("# QuantaAlpha — Trading Journal")
     A("")
     A(f"*Generated: {ts.strftime('%Y-%m-%d %H:%M')} UTC* &nbsp;|&nbsp; "
-      f"*Strategy: TopkDropout (topk={topk})* &nbsp;|&nbsp; "
-      f"*Initial Capital: {_usd(initial_capital)}*")
+      f"*Model: **{model_name}*** &nbsp;|&nbsp; "
+      f"*Strategy: TopkDropout (topk={topk}, n_drop={ai.get('n_drop', 1)})* &nbsp;|&nbsp; "
+      f"*Capital: {_usd(initial_capital)}*")
     A("")
     A("---")
     A("")
@@ -136,12 +232,73 @@ def generate_chain_report(
     # ── Block #0 — Initial state ──────────────────────────────────────
     A("## 🏁 Block #0 — Initial State")
     A("")
+
+    # ── Algorithm profile (shown when algo_info provided) ─────────────
+    if ai.get("model_stem"):
+        A("### 🤖 Algorithm Profile")
+        A("")
+        A("| | |")
+        A("|---|---|")
+        A(f"| **Model** | `{ai['model_stem']}` |")
+        num_f = ai.get("num_features")
+        if num_f:
+            A(f"| **Features** | {num_f} custom alpha factors (LLM-mined) |")
+        fj = ai.get("factor_json")
+        if fj:
+            A(f"| **Factor library** | `{fj}` |")
+        market = ai.get("market", "")
+        if market:
+            A(f"| **Universe** | {market.upper()} |")
+        bm = ai.get("benchmark", "")
+        if bm:
+            A(f"| **Benchmark** | {bm} |")
+        if ai.get("train_range"):
+            A(f"| **Training period** | {ai['train_range']} |")
+        A("")
+
+    # ── Backtest performance card ─────────────────────────────────────
+    if ai.get("arr") is not None:
+        test_range = ai.get("test_range", "")
+        A(f"### 📊 Backtest Performance"
+          + (f" ({test_range})" if test_range else ""))
+        A("")
+        A("| Metric | Value | |")
+        A("|--------|-------|---|")
+        arr = ai["arr"]
+        ir  = ai.get("ir")
+        mdd = ai.get("mdd")
+        cal = ai.get("calmar")
+        ic  = ai.get("ic")
+        ric = ai.get("rank_ic")
+        A(f"| Annualized Return | **{arr*100:+.1f}%** | excess vs {ai.get('benchmark','SPY')} |")
+        if ir is not None:
+            A(f"| Information Ratio (Sharpe) | {ir:.3f} | |")
+        if mdd is not None:
+            A(f"| Max Drawdown | {mdd*100:.1f}% | |")
+        if cal is not None:
+            A(f"| Calmar Ratio | {cal:.3f} | Return / MDD |")
+        if ic is not None:
+            A(f"| IC | {ic:.4f} | prediction accuracy |")
+        if ric is not None:
+            A(f"| Rank IC | {ric:.4f} | rank correlation |")
+        src = ai.get("metrics_source", "")
+        if src:
+            A("")
+            A(f"*Source: `{src}`*")
+        A("")
+
+    # ── Strategy parameters ───────────────────────────────────────────
+    A("### ⚙️ Strategy Parameters")
+    A("")
     A("| | |")
     A("|---|---|")
     A(f"| **Capital** | {_usd(initial_capital)} |")
-    A(f"| **Positions** | None — 100% cash |")
-    A(f"| **Strategy** | TopkDropout: hold top-{topk} by model score, "
-      "drop 1 per rebalance |")
+    A(f"| **Portfolio size** | top-{topk} stocks by model score |")
+    A(f"| **Rebalance** | drop {ai.get('n_drop', 1)} position(s) per session |")
+    max_pos = ai.get("max_position_pct")
+    if max_pos:
+        A(f"| **Max single position** | {max_pos*100:.0f}% of capital |")
+    A(f"| **Initial positions** | 100% cash |")
     A("")
 
     # Running account state across blocks
@@ -377,6 +534,7 @@ def save_chain_report(
     output_dir: Optional[str | Path] = None,
     initial_capital: float = 1_000_000.0,
     topk: int = 10,
+    config_path: Optional[str | Path] = None,
     generated_at: Optional[datetime] = None,
 ) -> Path:
     """Load all order files, build chain report, save to disk.
@@ -389,6 +547,9 @@ def save_chain_report(
         Where to write the report (default: ``{orders_dir}/reports``).
     initial_capital, topk:
         Passed to :func:`generate_chain_report`.
+    config_path:
+        Path to ``live.yaml``.  When provided, algorithm profile and
+        backtest metrics are embedded in the report's initial block.
 
     Returns
     -------
@@ -396,8 +557,15 @@ def save_chain_report(
         Path to the written ``trading_journal.md`` file.
     """
     days = load_all_orders(orders_dir)
+    algo_info = load_algo_info(config_path) if config_path else {}
+    # config may override capital/topk
+    if algo_info.get("capital") and initial_capital == 1_000_000.0:
+        initial_capital = float(algo_info["capital"])
+    if algo_info.get("topk") and topk == 10:
+        topk = int(algo_info["topk"])
     md = generate_chain_report(days, initial_capital=initial_capital,
-                               topk=topk, generated_at=generated_at)
+                               topk=topk, algo_info=algo_info,
+                               generated_at=generated_at)
     out = Path(output_dir or Path(orders_dir) / "reports")
     out.mkdir(parents=True, exist_ok=True)
     path = out / "trading_journal.md"

@@ -398,3 +398,213 @@ def test_generated_at_in_footer():
     ts = datetime(2026, 3, 1, 12, 0, 0, tzinfo=timezone.utc)
     md = generate_chain_report([DAY1], initial_capital=1_000_000.0, generated_at=ts)
     assert "2026-03-01 12:00" in md
+
+
+# ─── algo_info rendering ──────────────────────────────────────────────────────
+
+ALGO_INFO: dict = {
+    "model_stem": "us_union89_prod",
+    "num_features": 89,
+    "factor_json": "all_factors_library_us.json",
+    "topk": 10,
+    "n_drop": 1,
+    "capital": 1_000_000.0,
+    "max_position_pct": 0.10,
+    "market": "sp500",
+    "benchmark": "SPY",
+    "train_range": "2016-01-01 ~ 2025-12-31",
+    "test_range": "2022-01-01 ~ 2025-12-31",
+    "arr": 0.18496,
+    "ir": 0.4944,
+    "mdd": -0.18129,
+    "calmar": 1.0202,
+    "ic": 0.03354,
+    "rank_ic": 0.03192,
+    "metrics_source": "us_union89_prod_backtest_metrics.json",
+}
+
+
+def test_algo_info_model_name_in_header():
+    md = generate_chain_report([DAY1], algo_info=ALGO_INFO)
+    assert "us_union89_prod" in md
+
+
+def test_algo_info_algorithm_profile_section():
+    md = generate_chain_report([DAY1], algo_info=ALGO_INFO)
+    assert "Algorithm Profile" in md
+    assert "89 custom alpha factors" in md
+
+
+def test_algo_info_backtest_performance_section():
+    md = generate_chain_report([DAY1], algo_info=ALGO_INFO)
+    assert "Backtest Performance" in md
+    assert "2022-01-01 ~ 2025-12-31" in md
+
+
+def test_algo_info_arr_shown():
+    md = generate_chain_report([DAY1], algo_info=ALGO_INFO)
+    assert "+18.5%" in md
+
+
+def test_algo_info_mdd_shown():
+    md = generate_chain_report([DAY1], algo_info=ALGO_INFO)
+    assert "-18.1%" in md
+
+
+def test_algo_info_calmar_shown():
+    md = generate_chain_report([DAY1], algo_info=ALGO_INFO)
+    assert "1.020" in md
+
+
+def test_algo_info_ic_shown():
+    md = generate_chain_report([DAY1], algo_info=ALGO_INFO)
+    assert "0.0335" in md
+
+
+def test_algo_info_strategy_params_section():
+    md = generate_chain_report([DAY1], algo_info=ALGO_INFO)
+    assert "Strategy Parameters" in md
+    assert "top-10 stocks" in md
+    assert "drop 1 position" in md
+    assert "10% of capital" in md
+
+
+def test_algo_info_metrics_source_shown():
+    md = generate_chain_report([DAY1], algo_info=ALGO_INFO)
+    assert "us_union89_prod_backtest_metrics.json" in md
+
+
+def test_algo_info_none_no_crash():
+    """Report renders fine with no algo_info."""
+    md = generate_chain_report([DAY1], algo_info=None)
+    assert "Block #0" in md
+    assert "Strategy Parameters" in md
+
+
+def test_algo_info_empty_dict_no_crash():
+    md = generate_chain_report([DAY1], algo_info={})
+    assert "Block #0" in md
+
+
+def test_algo_info_partial_no_crash():
+    """Only some fields provided — no KeyError."""
+    md = generate_chain_report([DAY1], algo_info={"model_stem": "my_model", "arr": 0.15})
+    assert "my_model" in md
+    assert "+15.0%" in md
+
+
+# ─── load_algo_info ───────────────────────────────────────────────────────────
+
+def _write_live_yaml(path: Path, meta_path: str = "", metrics_path: str = "") -> None:
+    path.write_text(f"""
+portfolio:
+  topk: 10
+  n_drop: 1
+  capital: 1000000
+  max_position_pct: 0.10
+model:
+  meta_path: "{meta_path}"
+""")
+
+
+def _write_meta_json(path: Path, stem: str = "test_model") -> None:
+    path.write_text(json.dumps({
+        "model_stem": stem,
+        "num_features": 42,
+        "factor_json": "factors.json",
+        "booster_path": "model.txt",
+    }))
+
+
+def _write_metrics_json(path: Path) -> None:
+    path.write_text(json.dumps({
+        "metrics": {
+            "IC": 0.03,
+            "Rank IC": 0.028,
+            "annualized_return": 0.18,
+            "information_ratio": 0.5,
+            "max_drawdown": -0.20,
+            "calmar_ratio": 0.9,
+        },
+        "config": {
+            "market": "sp500",
+            "benchmark": "SPY",
+            "data_range": "2016~2025",
+            "test_range": "2022~2025",
+        },
+    }))
+
+
+from quantaalpha.live.report_md import load_algo_info
+
+
+def test_load_algo_info_missing_config(tmp_path: Path):
+    info = load_algo_info(tmp_path / "nonexistent.yaml")
+    assert info == {}
+
+
+def test_load_algo_info_no_model_path(tmp_path: Path):
+    cfg = tmp_path / "live.yaml"
+    _write_live_yaml(cfg, meta_path="")
+    info = load_algo_info(cfg)
+    assert info.get("topk") == 10
+
+
+def test_load_algo_info_reads_portfolio_params(tmp_path: Path):
+    cfg = tmp_path / "live.yaml"
+    _write_live_yaml(cfg)
+    info = load_algo_info(cfg)
+    assert info["topk"] == 10
+    assert info["n_drop"] == 1
+    assert info["capital"] == 1_000_000
+    assert info["max_position_pct"] == 0.10
+
+
+def test_load_algo_info_loads_meta(tmp_path: Path):
+    meta = tmp_path / "model_meta.json"
+    _write_meta_json(meta, stem="my_model")
+    cfg = tmp_path / "live.yaml"
+    _write_live_yaml(cfg, meta_path=str(meta))
+    info = load_algo_info(cfg)
+    assert info["model_stem"] == "my_model"
+    assert info["num_features"] == 42
+
+
+def test_load_algo_info_loads_metrics(tmp_path: Path):
+    meta = tmp_path / "my_model_meta.json"
+    _write_meta_json(meta, stem="my_model")
+    metrics = tmp_path / "my_model_backtest_metrics.json"
+    _write_metrics_json(metrics)
+    cfg = tmp_path / "live.yaml"
+    _write_live_yaml(cfg, meta_path=str(meta))
+    info = load_algo_info(cfg)
+    assert abs(info["arr"] - 0.18) < 1e-9
+    assert info["benchmark"] == "SPY"
+    assert info["mdd"] == pytest.approx(-0.20)
+
+
+def test_load_algo_info_missing_metrics_graceful(tmp_path: Path):
+    meta = tmp_path / "nomet_meta.json"
+    _write_meta_json(meta, stem="nomet")
+    cfg = tmp_path / "live.yaml"
+    _write_live_yaml(cfg, meta_path=str(meta))
+    info = load_algo_info(cfg)
+    assert info["model_stem"] == "nomet"
+    assert info.get("arr") is None
+
+
+def test_save_chain_report_with_config_path(tmp_path: Path):
+    """save_chain_report passes config info into the rendered report."""
+    meta = tmp_path / "m_meta.json"
+    _write_meta_json(meta, stem="m")
+    metrics = tmp_path / "m_backtest_metrics.json"
+    _write_metrics_json(metrics)
+    cfg = tmp_path / "live.yaml"
+    _write_live_yaml(cfg, meta_path=str(meta))
+    _write_orders(tmp_path, "2026-02-24", 990_000.0)
+
+    path = save_chain_report(tmp_path, config_path=cfg)
+    content = path.read_text()
+    assert "Algorithm Profile" in content
+    assert "m" in content
+
