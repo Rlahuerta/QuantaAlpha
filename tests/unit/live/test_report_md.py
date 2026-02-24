@@ -281,7 +281,71 @@ def test_topk_pnl_table_collapses_middle():
 
 
 
-# ─── P&L attribution section ──────────────────────────────────────────────────
+# ─── Cash reserve & floor tests ───────────────────────────────────────────────
+
+def test_cash_reserve_shown_in_end_of_day():
+    """End of Day section shows Cash Reserve % row."""
+    day = _make_day_with_n_buys(2)   # 2 × $10k buys; $980k cash remaining
+    md = generate_chain_report([day], initial_capital=1_000_000.0, topk=10)
+    assert "Cash Reserve" in md
+
+
+def test_cash_reserve_no_warning_when_above_floor():
+    """No ⚠️ when cash stays above 10% floor."""
+    day = _make_day_with_n_buys(2)   # $980k cash → 98% reserve — well above 10%
+    md = generate_chain_report([day], initial_capital=1_000_000.0, topk=10)
+    # No warning rows or flags in cash table or end of day
+    assert "⚠️" not in md
+
+
+def test_cash_reserve_warning_when_below_floor():
+    """⚠️ flag appears when closing cash < min_cash_pct of account."""
+    # 9 × $100k buys out of $1M → $100k cash = 10.0%; min_cash_pct=0.15 → ⚠️
+    day = {
+        "date": "2026-03-01",
+        "account_value": 1_000_000.0,
+        "daily_pnl": 0.0,
+        "orders": [
+            {"ticker": f"T{i:02d}", "shares": 1000, "action": "buy", "price": 100.0}
+            for i in range(9)   # 9 × $100,000 = $900,000 → $100,000 cash remaining
+        ],
+        "target_positions": {f"T{i:02d}": 1000 for i in range(9)},
+        "previous_positions": {},
+        "prices": {f"T{i:02d}": 100.0 for i in range(9)},
+        "position_pnl": {},
+    }
+    md = generate_chain_report([day], initial_capital=1_000_000.0,
+                               topk=10, min_cash_pct=0.15)
+    assert "⚠️" in md
+
+
+def test_cash_negative_warning_banner():
+    """When waterfall produces negative cash, a ⚠️ alert banner appears."""
+    # $1k opening cash, one $50k buy → -$49k
+    day = {
+        "date": "2026-03-01",
+        "account_value": 1_000_000.0,
+        "daily_pnl": 0.0,
+        "orders": [
+            {"ticker": "BIGBUY", "shares": 1000, "action": "buy", "price": 50.0}
+        ],
+        "target_positions": {"BIGBUY": 1000},
+        "previous_positions": {},
+        "prices": {"BIGBUY": 50.0},
+        "position_pnl": {},
+    }
+    # Start with only $1,000 in cash
+    md = generate_chain_report([day], initial_capital=1_000.0, topk=10)
+    assert "Cash alert" in md
+    assert "negative" in md
+
+
+def test_cash_floor_in_strategy_params():
+    """Block #0 strategy parameters show the configured cash reserve floor."""
+    md = generate_chain_report([], initial_capital=1_000_000.0, min_cash_pct=0.10)
+    assert "Cash reserve floor" in md
+    assert "10%" in md
+
 
 def test_position_pnl_table_present():
     md = generate_chain_report([DAY2], initial_capital=1_000_000.0)

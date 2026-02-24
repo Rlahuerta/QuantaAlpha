@@ -187,6 +187,7 @@ def generate_chain_report(
     *,
     initial_capital: float = 1_000_000.0,
     topk: int = 10,
+    min_cash_pct: float = 0.10,
     algo_info: Optional[Dict[str, Any]] = None,
     generated_at: Optional[datetime] = None,
 ) -> str:
@@ -201,6 +202,9 @@ def generate_chain_report(
         Starting cash (used for the initial block).
     topk:
         Number of algorithm picks to show in the current-day section.
+    min_cash_pct:
+        Minimum cash reserve as a fraction of account value (default: 10%).
+        Blocks where cash falls below this threshold are flagged with ⚠️.
     algo_info:
         Optional dict returned by :func:`load_algo_info`.  When present,
         the initial block includes an algorithm profile with backtest metrics.
@@ -298,6 +302,7 @@ def generate_chain_report(
     max_pos = ai.get("max_position_pct")
     if max_pos:
         A(f"| **Max single position** | {max_pos*100:.0f}% of capital |")
+    A(f"| **Cash reserve floor** | {min_cash_pct*100:.0f}% of account value |")
     A(f"| **Initial positions** | 100% cash |")
     A("")
 
@@ -427,6 +432,14 @@ def generate_chain_report(
             running_cash = prev_cash
             A(f"| **Opening Cash** | — | — | — | — | **{_usd(running_cash)}** |")
 
+            def _cash_flag(v: float) -> str:
+                """Return ⚠️ suffix when cash is negative or below reserve floor."""
+                if v < 0:
+                    return " ⚠️"
+                if account and v < min_cash_pct * account:
+                    return " ⚠️"
+                return ""
+
             # SELLs first (generate cash) — always show all sells
             for o in sells_sorted:
                 t = o["ticker"]
@@ -437,7 +450,7 @@ def generate_chain_report(
                 in_target = t in target
                 icon = "🟡 REDUCE" if in_target else "🔴 SELL ALL"
                 A(f"| {icon} | {t} | −{sh:,} | {_usd(px)} | "
-                  f"+{_usd(val)} | {_usd(running_cash)} |")
+                  f"+{_usd(val)} | {_usd(running_cash)}{_cash_flag(running_cash)} |")
 
             # BUYs (consume cash) — show up to buy_slots
             for o in buys_show:
@@ -449,7 +462,7 @@ def generate_chain_report(
                 is_new = t not in prev_pos
                 icon = "🟢 BUY NEW" if is_new else "🔵 ADD"
                 A(f"| {icon} | {t} | +{sh:,} | {_usd(px)} | "
-                  f"−{_usd(val)} | {_usd(running_cash)} |")
+                  f"−{_usd(val)} | {_usd(running_cash)}{_cash_flag(running_cash)} |")
 
             # Collapsed row for hidden buys
             if buys_hide:
@@ -458,10 +471,25 @@ def generate_chain_report(
                 running_cash -= hidden_val
                 A(f"| *(+{len(buys_hide)} more buys)* | "
                   f"*{hidden_tickers}* | — | — | "
-                  f"−{_usd(hidden_val)} | {_usd(running_cash)} |")
+                  f"−{_usd(hidden_val)} | {_usd(running_cash)}{_cash_flag(running_cash)} |")
 
-            A(f"| **Closing Cash** | — | — | — | — | **{_usd(running_cash)}** |")
+            closing_flag = _cash_flag(running_cash)
+            A(f"| **Closing Cash** | — | — | — | — | "
+              f"**{_usd(running_cash)}**{closing_flag} |")
             A("")
+
+            # Warning banner when cash is negative or below floor
+            cash_floor = min_cash_pct * account if account else 0.0
+            if running_cash < 0:
+                A(f"> ⚠️ **Cash alert**: Closing cash ({_usd(running_cash)}) is **negative**. "
+                  f"These orders may have been infeasible — please verify account reconciliation.")
+                A("")
+            elif cash_floor > 0 and running_cash < cash_floor:
+                A(f"> ⚠️ **Cash reserve below {min_cash_pct*100:.0f}% floor**: "
+                  f"Closing cash ({_usd(running_cash)}) is below the reserve target "
+                  f"({_usd(cash_floor)}).")
+                A("")
+
             prev_cash = running_cash
         else:
             # No trades
@@ -491,12 +519,18 @@ def generate_chain_report(
         invested = sum(target.get(t, 0) * prices.get(t, 0) for t in target)
         eod_cash = cash_eod if cash_eod is not None else (account - invested)
 
+        # Cash reserve metrics
+        cash_reserve_pct = eod_cash / account if account else 0.0
+        reserve_ok = cash_reserve_pct >= min_cash_pct
+        reserve_flag = "" if reserve_ok else " ⚠️"
+
         A("### 🔒 End of Day")
         A("")
         A("| | Value |")
         A("|---|-------|")
         A(f"| Portfolio (invested) | {_usd(invested)} |")
-        A(f"| Cash | {_usd(eod_cash)} |")
+        A(f"| Cash | {_usd(eod_cash)}{reserve_flag} |")
+        A(f"| Cash Reserve | {cash_reserve_pct*100:.1f}%{reserve_flag} |")
         A(f"| **Total Account** | **{_usd(account)}** |")
         A(f"| Cumulative P&L | {_sign(cumulative_pnl)}{_usd(cumulative_pnl)} |")
         A(f"| Positions | {len(target)} |")
@@ -585,6 +619,7 @@ def save_chain_report(
     output_dir: Optional[str | Path] = None,
     initial_capital: float = 1_000_000.0,
     topk: int = 10,
+    min_cash_pct: float = 0.10,
     config_path: Optional[str | Path] = None,
     generated_at: Optional[datetime] = None,
 ) -> Path:
@@ -596,7 +631,7 @@ def save_chain_report(
         Directory containing ``pending_orders_*.json`` and ``archive/``.
     output_dir:
         Where to write the report (default: ``{orders_dir}/reports``).
-    initial_capital, topk:
+    initial_capital, topk, min_cash_pct:
         Passed to :func:`generate_chain_report`.
     config_path:
         Path to ``live.yaml``.  When provided, algorithm profile and
@@ -615,7 +650,8 @@ def save_chain_report(
     if algo_info.get("topk") and topk == 10:
         topk = int(algo_info["topk"])
     md = generate_chain_report(days, initial_capital=initial_capital,
-                               topk=topk, algo_info=algo_info,
+                               topk=topk, min_cash_pct=min_cash_pct,
+                               algo_info=algo_info,
                                generated_at=generated_at)
     out = Path(output_dir or Path(orders_dir) / "reports")
     out.mkdir(parents=True, exist_ok=True)
