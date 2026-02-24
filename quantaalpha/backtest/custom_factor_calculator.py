@@ -614,6 +614,7 @@ class CustomFactorCalculator:
             try:
                 target_idx = self.data_df.index
             except Exception:
+                logger.debug("data_df.index not available, returning raw result")
                 return result if len(result) > 0 and not result.isna().all() else None
         
         # Align index (duplicate-safe)
