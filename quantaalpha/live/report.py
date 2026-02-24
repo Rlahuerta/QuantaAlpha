@@ -67,22 +67,33 @@ def render_report(data: Dict[str, Any], *, file=None) -> None:
     date_str = data.get("date", "?")
     account = data.get("account_value", 0)
     daily_pnl = data.get("daily_pnl", 0)
-    cash = data.get("cash", 0)
-    cum_pnl = data.get("cumulative_pnl", 0)
-    cum_excess = data.get("cumulative_excess_return", 0)
-    bench = data.get("benchmark_return", 0)
-    prev_pos = data.get("previous_positions", {})
-    target = data.get("target_positions", {})
-    prices = data.get("prices", {})
-    orders = data.get("orders", [])
-    pos_pnl = data.get("position_pnl", {})
+    cash = data.get("cash", 0) or 0
+    cum_pnl = data.get("cumulative_pnl", 0) or 0
+    cum_excess = data.get("cumulative_excess_return", 0) or 0
+    bench = data.get("benchmark_return", 0) or 0
+    prev_pos = data.get("previous_positions") or {}
+    target = data.get("target_positions") or {}
+    prices = dict(data.get("prices") or {})
+    orders = data.get("orders") or []
+    pos_pnl = data.get("position_pnl") or {}
     scores_count = data.get("scores_count", 0)
-    capital = account  # for weight calc
 
-    # Invested value
+    # Fallback: extract prices from orders when prices dict is empty/missing
+    for o in orders:
+        t = o.get("ticker", "")
+        px = o.get("price", 0)
+        if t and px and t not in prices:
+            prices[t] = px
+
+    capital = account or 1  # avoid div-by-zero
+
+    # Invested value (sum of target positions × prices)
     invested = sum(
         target.get(t, 0) * prices.get(t, 0) for t in target
     )
+    # Derive cash if not explicitly provided
+    if not cash and account and invested:
+        cash = account - invested
 
     sep = "═" * 62
     thin = "─" * 62
@@ -97,16 +108,18 @@ def render_report(data: Dict[str, Any], *, file=None) -> None:
     p()
     p(_bold("  📊 ACCOUNT SUMMARY"))
     p(f"  Account Value:    ${account:>12,.2f}")
-    daily_ret = daily_pnl / (account - daily_pnl) if account != daily_pnl else 0
+    daily_ret = daily_pnl / (account - daily_pnl) if account and account != daily_pnl else 0
     p(f"  Daily P&L:        {_pnl_color(daily_pnl):>24s}  ({daily_ret:+.2%})")
     if bench:
         excess = daily_ret - bench
         p(f"  SPY Return:       {bench:>+12.2%}     Excess: {excess:+.2%}")
-    p(f"  Cumul P&L:        {_pnl_color(cum_pnl):>24s}  ({cum_excess:+.2%})")
+    if cum_pnl:
+        p(f"  Cumul P&L:        {_pnl_color(cum_pnl):>24s}  ({cum_excess:+.2%})")
     invest_pct = invested / account * 100 if account else 0
     cash_pct = cash / account * 100 if account else 0
     p(f"  Invested:         ${invested:>12,.0f} ({invest_pct:.0f}%)")
     p(f"  Cash:             ${cash:>12,.0f} ({cash_pct:.0f}%)")
+    p(f"  Positions:        {len(target):>12d}")
     p(f"  Tickers Scored:   {scores_count:>12d}")
 
     # ── Per-Position P&L ─────────────────────────────────────────
@@ -171,7 +184,8 @@ def render_report(data: Dict[str, Any], *, file=None) -> None:
         p(f"  {thin}")
         for o in sells:
             val = abs(o["shares"] * o["price"])
-            prev_sh = prev_pos.get(o["ticker"], 0)
+            # Use previous_positions if available, else the order's share count
+            prev_sh = prev_pos.get(o["ticker"]) or abs(o["shares"])
             p(
                 f"  {o['ticker']:<6s}  SELL ALL  "
                 f"{prev_sh:>,d} shares × ${o['price']:>8.2f} = "
@@ -185,7 +199,7 @@ def render_report(data: Dict[str, Any], *, file=None) -> None:
         for o in reduces:
             val = abs(o["shares"] * o["price"])
             tgt = target.get(o["ticker"], 0)
-            prev_sh = prev_pos.get(o["ticker"], 0)
+            prev_sh = prev_pos.get(o["ticker"]) or (tgt + abs(o["shares"]))
             p(
                 f"  {o['ticker']:<6s}  {prev_sh:>,d} → {tgt:>,d}  "
                 f"{o['shares']:>+,d} sh  ${val:>10,.0f}   {_dim(o['reason'])}"
@@ -211,8 +225,8 @@ def render_report(data: Dict[str, Any], *, file=None) -> None:
         p(f"  {'Ticker':<8s} {'Current':>8s} {'Target':>8s} {'Add':>8s}  {'Est. Cost':>12s}")
         p(f"  {'──────':<8s} {'───────':>8s} {'──────':>8s} {'───':>8s}  {'─────────':>12s}")
         for o in increases:
-            prev_sh = prev_pos.get(o["ticker"], 0)
             tgt = target.get(o["ticker"], 0)
+            prev_sh = prev_pos.get(o["ticker"]) or (tgt - abs(o["shares"]))
             val = abs(o["shares"] * o["price"])
             p(
                 f"  {o['ticker']:<8s} {prev_sh:>8,d} {tgt:>8,d} "
