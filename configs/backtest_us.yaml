@@ -141,6 +141,13 @@ backtest:
       close_cost: 0.001
       min_cost: 1
 
+  # Regime filter: go flat (bear_topk=0) or defensive (bear_topk=N) when
+  # the benchmark is below its SMA(sma_period). Disabled by default.
+  regime_filter:
+    enabled: false
+    sma_period: 200            # days for benchmark SMA
+    bear_topk: 0               # 0 = fully flat; N = hold N stocks during bear
+
 ######################################################################
 # 6. LLM (for custom factor computation)
 ######################################################################

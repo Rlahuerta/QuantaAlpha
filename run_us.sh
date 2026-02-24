@@ -16,7 +16,10 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
-# Load base .env
+# Load base .env (preserve any model overrides passed from the caller)
+_SAVED_CHAT_MODEL="${CHAT_MODEL:-}"
+_SAVED_REASONING_MODEL="${REASONING_MODEL:-}"
+_SAVED_OPENAI_BASE_URL="${OPENAI_BASE_URL:-}"
 if [ -f "${SCRIPT_DIR}/.env" ]; then
     set -a
     source "${SCRIPT_DIR}/.env"
@@ -25,6 +28,10 @@ else
     echo "Error: .env file not found"
     exit 1
 fi
+# Restore caller-supplied overrides so per-run model/endpoint selection is respected
+[ -n "${_SAVED_CHAT_MODEL}" ]      && export CHAT_MODEL="${_SAVED_CHAT_MODEL}"
+[ -n "${_SAVED_REASONING_MODEL}" ] && export REASONING_MODEL="${_SAVED_REASONING_MODEL}"
+[ -n "${_SAVED_OPENAI_BASE_URL}" ] && export OPENAI_BASE_URL="${_SAVED_OPENAI_BASE_URL}"
 
 # =============================================================================
 # US-specific overrides
@@ -70,6 +77,10 @@ echo "US HDF5 data: ${US_HDF5_DIR}"
 eval "$(conda shell.bash hook)" 2>/dev/null
 conda activate "${CONDA_ENV_NAME:-quantaalpha}" 2>/dev/null || \
     source activate "${CONDA_ENV_NAME:-quantaalpha}" 2>/dev/null
+# Re-apply overrides after conda activation (conda env vars overwrite ours)
+[ -n "${_SAVED_CHAT_MODEL}" ]      && export CHAT_MODEL="${_SAVED_CHAT_MODEL}"
+[ -n "${_SAVED_REASONING_MODEL}" ] && export REASONING_MODEL="${_SAVED_REASONING_MODEL}"
+[ -n "${_SAVED_OPENAI_BASE_URL}" ] && export OPENAI_BASE_URL="${_SAVED_OPENAI_BASE_URL}"
 
 if ! command -v quantaalpha &> /dev/null; then
     echo "Error: quantaalpha command not found. Please install: pip install -e ."

@@ -53,6 +53,15 @@ class ExtendedBaseSettings(BaseSettings):
 
 
 class RDAgentSettings(ExtendedBaseSettings):
+    """
+    RDAgent configuration settings.
+
+    Environment variables use RD_AGENT_ prefix (e.g., RD_AGENT_WORKSPACE_PATH).
+    For backward compatibility, variables without prefix are also checked.
+    """
+
+    model_config = ExtendedSettingsConfigDict(env_prefix="RD_AGENT_")
+
     # TODO: (xiao) I think LLMSetting may be a better name.
     # TODO: (xiao) I think most of the config should be in oai.config
     # Log configs

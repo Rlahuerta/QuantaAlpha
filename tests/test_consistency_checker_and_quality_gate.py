@@ -238,7 +238,7 @@ def test_complexity_checker_disabled_pass_fail_and_exception(monkeypatch):
     disabled_checker = ComplexityChecker(enabled=False)
     assert disabled_checker.check("x")[0] is True
 
-    import quantaalpha.factors.coder.factor_ast as ast_module
+    import quantaalpha.factors.regulator.factor_ast as ast_module
 
     checker = ComplexityChecker(enabled=True, symbol_length_threshold=10, base_features_threshold=2, free_args_ratio_threshold=0.5)
     monkeypatch.setattr(ast_module, "calculate_symbol_length", lambda expr: 8)

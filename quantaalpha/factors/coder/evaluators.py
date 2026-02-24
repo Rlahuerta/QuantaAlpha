@@ -15,7 +15,8 @@ from quantaalpha.factors.coder.factor import FactorTask
 from quantaalpha.factors.coder.config import FACTOR_COSTEER_SETTINGS
 from quantaalpha.core.evolving_framework import QueriedKnowledge
 from quantaalpha.core.experiment import Workspace
-from quantaalpha.factors.regulator.factor_regulator import FactorRegulator
+# Lazy import to avoid circular dependency with factor_regulator
+# from quantaalpha.factors.regulator.factor_regulator import FactorRegulator
 from quantaalpha.log import logger
 
 FactorSingleFeedback = CoSTEERSingleFeedback
@@ -39,6 +40,8 @@ class FactorEvaluatorForCoder(CoSTEEREvaluator):
         duplication_threshold = duplication_threshold if duplication_threshold is not None else FACTOR_COSTEER_SETTINGS.duplication_threshold
         symbol_length_threshold = getattr(FACTOR_COSTEER_SETTINGS, 'symbol_length_threshold', 300)
         base_features_threshold = getattr(FACTOR_COSTEER_SETTINGS, 'base_features_threshold', 6)
+        # Lazy import to avoid circular dependency
+        from quantaalpha.factors.regulator.factor_regulator import FactorRegulator
         self.factor_regulator = FactorRegulator(
             factor_zoo_path=factor_zoo_path,
             duplication_threshold=duplication_threshold,

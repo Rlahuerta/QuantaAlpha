@@ -1,17 +1,29 @@
 """
 QuantaAlpha LLM configuration.
 
-All LLM-related settings; loaded from env via Pydantic-settings (e.g. CHAT_MODEL).
+All LLM-related settings; loaded from env via Pydantic-settings.
+Environment variables use LLM_ prefix (e.g., LLM_CHAT_MODEL, LLM_REASONING_MODEL).
+
+Migration note: The following env vars changed names:
+- CHAT_MODEL -> LLM_CHAT_MODEL
+- REASONING_MODEL -> LLM_REASONING_MODEL
+- CHAT_MAX_TOKENS -> LLM_CHAT_MAX_TOKENS
+- CHAT_TEMPERATURE -> LLM_CHAT_TEMPERATURE
+- FACTOR_MINING_TIMEOUT -> LLM_FACTOR_MINING_TIMEOUT
+- etc. (all LLMSettings fields now require LLM_ prefix)
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from quantaalpha.core.conf import ExtendedBaseSettings
+from quantaalpha.core.conf import ExtendedBaseSettings, ExtendedSettingsConfigDict
 
 
 class LLMSettings(ExtendedBaseSettings):
+    """LLM configuration with LLM_ env prefix."""
+
+    model_config = ExtendedSettingsConfigDict(env_prefix="LLM_")
     log_llm_chat_content: bool = True
     max_retry: int = 30
     retry_wait_seconds: int = 15

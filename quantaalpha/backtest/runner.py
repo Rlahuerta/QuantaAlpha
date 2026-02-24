@@ -365,15 +365,31 @@ class BacktestRunner:
             logger.debug(f"  label    instrument sample={label_inst[:3].tolist()}")
             
             try:
+                # Use safe datetime conversion that preserves index structure
+                # set_levels() with .unique() can corrupt the index
+                def _safe_convert_datetime_level(df: pd.DataFrame, level: str = 'datetime') -> pd.DataFrame:
+                    """Safely convert datetime level without corrupting index structure."""
+                    if not isinstance(df.index, pd.MultiIndex):
+                        return df
+                    dt_values = df.index.get_level_values(level)
+                    if pd.api.types.is_datetime64_any_dtype(dt_values):
+                        return df
+                    # Create new MultiIndex with converted datetime
+                    new_levels = []
+                    for i, name in enumerate(df.index.names):
+                        if name == level:
+                            new_levels.append(pd.to_datetime(df.index.get_level_values(i)))
+                        else:
+                            new_levels.append(df.index.get_level_values(i))
+                    df = df.copy()
+                    df.index = pd.MultiIndex.from_arrays(new_levels, names=df.index.names)
+                    return df
+
                 if not pd.api.types.is_datetime64_any_dtype(feat_dt):
-                    features_df.index = features_df.index.set_levels(
-                        pd.to_datetime(feat_dt.unique()), level='datetime'
-                    )
+                    features_df = _safe_convert_datetime_level(features_df, 'datetime')
                     logger.debug("  features datetime converted to Timestamp")
                 if not pd.api.types.is_datetime64_any_dtype(label_dt):
-                    label_df.index = label_df.index.set_levels(
-                        pd.to_datetime(label_dt.unique()), level='datetime'
-                    )
+                    label_df = _safe_convert_datetime_level(label_df, 'datetime')
                     logger.debug("  label datetime converted to Timestamp")
             except Exception as e:
                 logger.warning(f"  datetime type conversion failed: {e}")
@@ -640,6 +656,18 @@ class BacktestRunner:
         close_cost = float(exchange_kwargs.get("close_cost", 0.001))
         trade_cost = open_cost + close_cost  # round-trip cost per stock replaced
 
+        # --- Regime filter: reduce exposure when benchmark < SMA(sma_period) ---
+        regime_cfg = (self.config.get("backtest", {}) or {}).get("regime_filter", {})
+        regime_enabled = bool(regime_cfg.get("enabled", False))
+        regime_sma_period = int(regime_cfg.get("sma_period", 200))
+        regime_bear_topk = int(regime_cfg.get("bear_topk", 0))  # 0 = fully flat
+        regime_dates: set = set()
+        if regime_enabled:
+            b_raw = bench[["datetime", "open"]].copy().sort_values("datetime").set_index("datetime")
+            b_raw["sma"] = b_raw["open"].rolling(regime_sma_period, min_periods=regime_sma_period // 2).mean()
+            bear_mask = b_raw["open"] < b_raw["sma"]
+            regime_dates = set(b_raw.index[bear_mask])
+
         def _weights(sub: pd.DataFrame) -> pd.Series:
             """Compute portfolio weights for the selected sub-DataFrame."""
             if weight_scheme == "linear_rank":
@@ -666,10 +694,20 @@ class BacktestRunner:
             ranked = day["score"].sort_values(ascending=False)
             candidates = list(ranked.index)  # all symbols ranked by score
 
+            # Apply regime filter: reduce effective topk during bear markets
+            effective_topk = topk
+            if regime_enabled and dt in regime_dates:
+                effective_topk = regime_bear_topk
+
             prev_holdings = set(holdings)
+            # Flat when bear_topk=0 during bear regime — sit in cash
+            if effective_topk == 0:
+                holdings = set()
+                daily_rets[dt] = 0.0
+                continue
             if not holdings:
                 # Bootstrap: simply take top-K
-                holdings = set(candidates[:topk])
+                holdings = set(candidates[:effective_topk])
             else:
                 # 1. Find holdings that have fallen out of the visible candidates
                 outside = [s for s in holdings if s not in day.index]
@@ -680,7 +718,7 @@ class BacktestRunner:
                 to_drop = set(held_sorted_worst_first[:n_drop])
                 holdings -= to_drop
                 # 4. Fill vacancies with highest-ranked non-holdings
-                vacancies = topk - len(holdings)
+                vacancies = effective_topk - len(holdings)
                 for sym in candidates:
                     if vacancies <= 0:
                         break
@@ -690,12 +728,13 @@ class BacktestRunner:
 
             portfolio = day.loc[[s for s in holdings if s in day.index]]
             if portfolio.empty:
+                daily_rets[dt] = 0.0
                 continue
             w = _weights(portfolio)
             gross_ret = float((portfolio["next_ret"] * w).sum())
             # Cost: stocks newly entered (not in prev_holdings) pay round-trip cost
             n_new = sum(1 for s in portfolio.index if s not in prev_holdings)
-            turnover = n_new / topk if topk > 0 else 0.0
+            turnover = n_new / effective_topk if effective_topk > 0 else 0.0
             daily_rets[dt] = gross_ret - turnover * trade_cost
 
         strat_ret = pd.Series(daily_rets).sort_index()

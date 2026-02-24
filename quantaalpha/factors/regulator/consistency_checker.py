@@ -258,8 +258,8 @@ class ComplexityChecker:
             return True, "Complexity check disabled"
         
         try:
-            from quantaalpha.factors.coder.factor_ast import (
-                calculate_symbol_length, 
+            from quantaalpha.factors.regulator.factor_ast import (
+                calculate_symbol_length,
                 count_base_features,
                 count_free_args,
                 count_all_nodes

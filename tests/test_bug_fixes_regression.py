@@ -22,7 +22,7 @@ import pytest
 # B1 – SubtreeMatch.__str__ no longer raises NameError
 # ---------------------------------------------------------------------------
 
-import quantaalpha.factors.coder.factor_ast as ast_module
+import quantaalpha.factors.regulator.factor_ast as ast_module
 
 
 def test_b1_subtree_match_str_no_name_error():

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import uuid
 from dataclasses import dataclass
@@ -114,11 +115,31 @@ class FactorFBWorkspace(FBWorkspace):
         self.raise_exception = raise_exception
 
     def hash_func(self, data_type: str = "Debug") -> str:
-        return (
-            md5_hash(data_type + self.code_dict["factor.py"])
-            if ("factor.py" in self.code_dict and not self.raise_exception)
-            else None
-        )
+        """
+        Generate a cache key that uniquely identifies this factor execution.
+
+        Includes:
+        - data_type: Debug, Train, etc.
+        - code: The factor.py source code
+        - factor_name: Unique identifier for the factor
+        - variables: Any custom variables (if present)
+
+        This prevents cache collisions between different factors with identical code.
+        """
+        if "factor.py" not in self.code_dict or self.raise_exception:
+            return None
+
+        content = {
+            "data_type": data_type,
+            "code": self.code_dict["factor.py"],
+            "factor_name": self.target_task.factor_name,
+        }
+
+        # Include variables if present to differentiate factors with same code but different data
+        if hasattr(self.target_task, 'variables') and self.target_task.variables:
+            content["variables"] = str(sorted(self.target_task.variables.items()))
+
+        return md5_hash(json.dumps(content, sort_keys=True))
 
     @cache_with_pickle(hash_func)
     def execute(self, data_type: str = "Debug") -> FactorExecutionResult:

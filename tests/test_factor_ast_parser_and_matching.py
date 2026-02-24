@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-import quantaalpha.factors.coder.factor_ast as ast_module
+import quantaalpha.factors.regulator.factor_ast as ast_module
 
 
 def test_node_string_and_tree_views(capsys):

@@ -4,7 +4,7 @@ from typing import Tuple, List, Dict, Any, Optional
 from quantaalpha.core.evaluation import Evaluator
 from quantaalpha.log import logger
 from quantaalpha.core.scenario import Scenario
-from quantaalpha.factors.coder.factor_ast import (
+from quantaalpha.factors.regulator.factor_ast import (
     match_alphazoo, count_free_args, count_unique_vars, count_all_nodes,
     calculate_symbol_length, count_base_features
 )
@@ -148,19 +148,32 @@ class FactorRegulator(Evaluator):
         # Calculate ratios
         free_args_ratio = float(num_free_args) / float(num_all_nodes)
         unique_vars_ratio = float(num_unique_vars) / float(num_all_nodes)
-        
-        # Ensure ratios are within valid range (0 <= ratio < 1)
-        if free_args_ratio >= 1 or unique_vars_ratio >= 1:
+
+        # Ensure ratios are within valid range (0 <= ratio <= 1)
+        # Only reject if ratio > 1 (mathematically impossible, indicates data error)
+        if free_args_ratio > 1 or unique_vars_ratio > 1:
             logger.warning(f"Invalid ratio detected: free_args_ratio={free_args_ratio}, unique_vars_ratio={unique_vars_ratio}")
             return False
-        
+
         # Condition 2: Ensure the ratio of num_free_args to total nodes is not too high using -log(1 - ratio)
         # -log(1 - x) increases as x increases, so we set a threshold (e.g., -log(1 - 0.5) ≈ 0.693)
         # This ensures the ratio is not too high (e.g., x < 0.5)
-        cond2 = -np.log(1 - free_args_ratio) < 0.693  # Threshold for x < 0.5
-        
+        # Handle edge case where ratio == 1.0 (simple expressions like $close)
+        if free_args_ratio >= 1.0:
+            cond2 = False  # Too many free args relative to nodes
+        elif free_args_ratio == 0:
+            cond2 = True
+        else:
+            cond2 = -np.log(1 - free_args_ratio) < 0.693
+
         # Condition 3: Ensure the ratio of num_unique_vars to total nodes is not too high using -log(1 - ratio)
-        cond3 = -np.log(1 - unique_vars_ratio) < 0.693  # Threshold for x < 0.5
+        # Handle edge case where ratio == 1.0 (simple expressions like $close are valid)
+        if unique_vars_ratio >= 1.0:
+            cond3 = True  # All nodes are variables, which is fine for simple expressions
+        elif unique_vars_ratio == 0:
+            cond3 = True
+        else:
+            cond3 = -np.log(1 - unique_vars_ratio) < 0.693
         
         # Condition 4: Check symbol length (SL) - expression should not be too long
         cond4 = symbol_length <= self.symbol_length_threshold

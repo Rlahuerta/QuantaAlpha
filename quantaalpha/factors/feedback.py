@@ -237,7 +237,7 @@ class AlphaAgentQlibFactorHypothesisExperiment2Feedback(HypothesisExperiment2Fee
         # Extract complexity information by directly calculating from factor expressions
         # Import complexity calculation functions
         try:
-            from quantaalpha.factors.coder.factor_ast import (
+            from quantaalpha.factors.regulator.factor_ast import (
                 calculate_symbol_length, count_base_features
             )
             from quantaalpha.factors.coder.config import FACTOR_COSTEER_SETTINGS
