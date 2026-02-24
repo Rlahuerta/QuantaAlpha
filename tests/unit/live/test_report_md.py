@@ -196,21 +196,23 @@ def _make_day_with_n_buys(n: int) -> dict:
 
 
 def test_topk_limits_buy_rows_displayed():
-    """With topk=3 and 10 buys, only 3 individual rows + 1 collapsed row shown."""
+    """With topk=3 and 10 buys, only 3 execute; remaining 7 skipped (portfolio cap)."""
     day = _make_day_with_n_buys(10)
     md = generate_chain_report([day], initial_capital=1_000_000.0, topk=3)
-    # 3 visible BUY rows
+    # 3 executed BUY rows
     assert md.count("🟢 BUY NEW") == 3
-    # 1 collapsed row for the remaining 7
-    assert "7 more buys" in md
+    # 7 skipped because they would exceed the portfolio cap
+    assert "7 buy order(s) skipped" in md
+    assert "portfolio cap (3 positions) reached" in md
 
 
 def test_topk_collapsed_row_shows_correct_cash():
-    """Cash arithmetic must include hidden orders in the collapsed row."""
+    """With topk=2 and 5 buys, only 2 execute; remaining 3 skipped — cash reflects 2 buys only."""
     day = _make_day_with_n_buys(5)  # 5 × $10,000 = $50,000 total buys
     md = generate_chain_report([day], initial_capital=1_000_000.0, topk=2)
-    # Opening $1M, show 2 buys (-$10k each = $980k), collapse 3 (-$30k = $950k)
-    assert "$950,000.00" in md   # closing cash after all 5 buys
+    # Opening $1M, 2 buys execute (-$10k each = $980k), 3 skipped (portfolio cap)
+    assert "$980,000.00" in md   # closing cash after 2 buys only
+    assert "3 buy order(s) skipped" in md
 
 
 def test_topk_no_collapse_when_orders_lte_topk():
@@ -242,7 +244,7 @@ def test_topk_sells_always_shown():
 
 
 def test_topk_holds_collapsed():
-    """Hold list collapses excess tickers beyond topk."""
+    """target_positions > topk is truncated to topk; holds never exceed the cap."""
     holds = {f"H{i:02d}": i * 10 for i in range(20)}
     day = {
         "date": "2026-03-01",
@@ -255,8 +257,9 @@ def test_topk_holds_collapsed():
         "position_pnl": {},
     }
     md = generate_chain_report([day], initial_capital=1_000_000.0, topk=5)
-    assert "more:" in md   # collapsed suffix
-    assert "**Hold** (20 positions)" in md
+    # target is truncated to 5; all 5 are held — no collapse suffix
+    assert "more:" not in md
+    assert "**Hold** (5 positions)" in md
 
 
 def test_topk_pnl_table_collapses_middle():

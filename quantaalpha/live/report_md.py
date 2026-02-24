@@ -323,6 +323,9 @@ def generate_chain_report(
 
         orders: List[Dict] = day.get("orders") or []
         target: Dict[str, int] = day.get("target_positions") or {}
+        # Enforce portfolio size cap: keep only the topk highest-weight positions
+        if len(target) > topk:
+            target = dict(sorted(target.items(), key=lambda kv: kv[1], reverse=True)[:topk])
         prev_pos: Dict[str, int] = day.get("previous_positions") or prev_target
         prices: Dict[str, float] = dict(day.get("prices") or {})
         pos_pnl: Dict[str, Dict] = day.get("position_pnl") or {}
@@ -441,11 +444,13 @@ def generate_chain_report(
                 else:
                     infeasible_buys.append(o)
 
-            # Slots: all sells + fill remaining slots with feasible buys (up to topk)
-            sell_slots = len(sells_sorted)
-            buy_slots  = max(0, topk - sell_slots)
+            # Buy slots = space left under the topk cap after keeping held positions.
+            # Only count positions already in the (truncated) target — not every brokerage position.
+            sold_tickers = {o["ticker"] for o in sells_sorted}
+            n_kept = sum(1 for t in target if t in prev_pos and t not in sold_tickers)
+            buy_slots  = max(0, topk - n_kept)
             buys_show  = feasible_buys[:buy_slots]
-            buys_hide  = feasible_buys[buy_slots:]
+            buys_over  = feasible_buys[buy_slots:]  # would breach topk cap → truly skipped
 
             A("| Flow | Ticker | Shares | Price | Trade Value | Cash Balance |")
             A("|------|--------|--------|-------|-------------|--------------|")
@@ -473,7 +478,7 @@ def generate_chain_report(
                 A(f"| {icon} | {t} | −{sh:,} | {_usd(px)} | "
                   f"+{_usd(val)} | {_usd(running_cash)}{_cash_flag(running_cash)} |")
 
-            # BUYs (consume cash) — show up to buy_slots
+            # BUYs (consume cash) — only buys_show execute; buys_over are skipped (cap)
             for o in buys_show:
                 t = o["ticker"]
                 sh = abs(int(o.get("shares") or 0))
@@ -484,15 +489,6 @@ def generate_chain_report(
                 icon = "🟢 BUY NEW" if is_new else "🔵 ADD"
                 A(f"| {icon} | {t} | +{sh:,} | {_usd(px)} | "
                   f"−{_usd(val)} | {_usd(running_cash)}{_cash_flag(running_cash)} |")
-
-            # Collapsed row for hidden feasible buys
-            if buys_hide:
-                hidden_val = sum(_order_val(o) for o in buys_hide)
-                hidden_tickers = ", ".join(o["ticker"] for o in buys_hide)
-                running_cash -= hidden_val
-                A(f"| *(+{len(buys_hide)} more buys)* | "
-                  f"*{hidden_tickers}* | — | — | "
-                  f"−{_usd(hidden_val)} | {_usd(running_cash)}{_cash_flag(running_cash)} |")
 
             closing_flag = _cash_flag(running_cash)
             A(f"| **Closing Cash** | — | — | — | — | "
@@ -519,6 +515,15 @@ def generate_chain_report(
                   f"({_usd(total_skipped)} needed). Skipped: {sk_tickers}")
                 A("")
 
+            # Note: buys skipped because they would exceed the topk portfolio cap
+            if buys_over:
+                over_tks = ", ".join(o["ticker"] for o in buys_over[:8])
+                if len(buys_over) > 8:
+                    over_tks += f" *(+{len(buys_over) - 8} more)*"
+                A(f"> ⛔ **{len(buys_over)} buy order(s) skipped** — portfolio cap ({topk} positions) reached. "
+                  f"Skipped: {over_tks}")
+                A("")
+
             # Warning banner when cash is still below floor after feasible trades
             cash_floor = min_cash_pct * account if account else 0.0
             if running_cash < 0:
@@ -532,7 +537,7 @@ def generate_chain_report(
                 A("")
 
             # Holds = in target AND held AND NOT executed this block
-            executed_tickers = {o["ticker"] for o in sells_sorted + feasible_buys}
+            executed_tickers = {o["ticker"] for o in sells_sorted + buys_show}
             holds = [t for t in target if t in prev_pos and t not in executed_tickers]
 
             prev_cash = running_cash
