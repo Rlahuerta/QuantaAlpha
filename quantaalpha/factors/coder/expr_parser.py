@@ -113,42 +113,7 @@ def parse_arith_op(s, loc, tokens):
     
     return recursive_build_expression(tokens[0])
 
-# def parse_arith_op(s, loc, tokens):
-#     A = ''.join(flatten_nested_tokens(tokens[0][0]))
-#     op = ''.join(flatten_nested_tokens(tokens[0][1]))
-#     B = ''.join(flatten_nested_tokens(tokens[0][2]))
 
-#     if A == '' or B == '':
-#         raise ParseException(s, loc, f"Operator '{op}' missing operand")
-    
-#     A_is_number = is_number(A)
-#     B_is_number = is_number(B)
-    
-#     if A_is_number or B_is_number:
-#         return f"{A}{op}{B}"
-#     else:
-#         if 'BENCHMARKINDEX' in A and 'BENCHMARKINDEX' not in B:
-#             if op == '+':
-#                 return f'({B}).add({A}, axis=0)'
-#             elif op == '-':
-#                 return f'(-1*{(B)}).add({A}, axis=0)'
-#             elif op == '*':
-#                 return f'({B}).mul({A}, axis=0)'
-#             elif op == '/':
-#                 return f'(1/{(B)}).mul({A}, axis=0)'
-#             else:
-#                 raise NotImplementedError(f'arith op \'{op}\' is not implemented')
-#         else:
-#             if op == '+':
-#                 return f'({A}).add({B}, axis=0)'
-#             elif op == '-':
-#                 return f'({A}).sub({B}, axis=0)'
-#             elif op == '*':
-#                 return f'({A}).mul({B}, axis=0)'
-#             elif op == '/':
-#                 return f'({A}).div({B}, axis=0)'
-#             else:
-#                 raise NotImplementedError(f'arith op \'{op}\' is not implemented')
 
 
 def parse_conditional_expression(s, loc, tokens):

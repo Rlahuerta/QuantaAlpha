@@ -1126,7 +1126,7 @@ class BacktestRunner:
                                         metrics['annual_cost_rate'] = annual_cost
                                         metrics['cost_drag'] = ann_ret_gross - ann_ret
                             except Exception:
-                                pass
+                                logger.debug("Cost metrics calculation skipped")
                             
                             if not np.isnan(ann_ret) and not np.isinf(ann_ret):
                                 metrics['annualized_return'] = ann_ret

@@ -59,7 +59,7 @@ def test_factor_coder_entrypoints_wire_expected_strategy(monkeypatch):
 
 
 def test_regulator_init_importerror_fallback_branch(monkeypatch):
-    regulator_init_path = Path(__file__).resolve().parents[1] / "quantaalpha" / "factors" / "regulator" / "__init__.py"
+    regulator_init_path = Path(__file__).resolve().parents[2] / "quantaalpha" / "factors" / "regulator" / "__init__.py"
     original_import = builtins.__import__
 
     def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):  # noqa: ANN001, ANN201

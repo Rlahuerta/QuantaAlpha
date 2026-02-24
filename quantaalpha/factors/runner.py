@@ -213,7 +213,7 @@ class QlibFactorRunner(CachedRunner[QlibFactorExperiment]):
                             logger.info(f"  Marginal IC check — {col}: max_corr_vs_library={mc:.3f} "
                                         f"({'DEDUP' if mc >= 0.70 else 'NOVEL'})")
                 except Exception:
-                    pass
+                    logger.debug("Marginal IC check failed, skipping dedup diagnostics")
                 new_factors = self.deduplicate_new_factors(SOTA_factor, new_factors)
                 if new_factors.empty:
                     raise FactorEmptyError("No valid factor data found to merge.")

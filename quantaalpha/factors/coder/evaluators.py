@@ -15,8 +15,6 @@ from quantaalpha.factors.coder.factor import FactorTask
 from quantaalpha.factors.coder.config import FACTOR_COSTEER_SETTINGS
 from quantaalpha.core.evolving_framework import QueriedKnowledge
 from quantaalpha.core.experiment import Workspace
-# Lazy import to avoid circular dependency with factor_regulator
-# from quantaalpha.factors.regulator.factor_regulator import FactorRegulator
 from quantaalpha.log import logger
 
 FactorSingleFeedback = CoSTEERSingleFeedback

@@ -771,7 +771,7 @@ def test_b1_boltzmann_temperature_decays():
 def test_b2_extended_training_in_config():
     """backtest.yaml must have model.extended_training: true."""
     import yaml, os
-    cfg_path = os.path.join(os.path.dirname(__file__), '..', 'configs', 'backtest.yaml')
+    cfg_path = os.path.join(os.path.dirname(__file__), '..', '..', 'configs', 'backtest.yaml')
     with open(cfg_path) as f:
         cfg = yaml.safe_load(f)
     assert cfg['model'].get('extended_training') is True, \
@@ -785,7 +785,7 @@ def test_b2_extended_training_in_config():
 def test_b4_n_drop_reduced():
     """n_drop must be 2 (not 5) to reduce turnover costs."""
     import yaml, os
-    cfg_path = os.path.join(os.path.dirname(__file__), '..', 'configs', 'backtest.yaml')
+    cfg_path = os.path.join(os.path.dirname(__file__), '..', '..', 'configs', 'backtest.yaml')
     with open(cfg_path) as f:
         cfg = yaml.safe_load(f)
     n_drop = cfg['backtest']['strategy']['kwargs']['n_drop']

@@ -210,4 +210,4 @@ class QlibFBWorkspace(_RdagentQlibFBWorkspace):
                     timeout=5,
                 )
             except Exception:
-                pass
+                logger.debug("chmod cleanup failed in workspace, ignoring")

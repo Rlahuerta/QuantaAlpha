@@ -564,10 +564,8 @@ def _cleanup_experiment_caches() -> None:
                     shutil.rmtree(p, ignore_errors=True)
                     removed += 1
                     freed += size
-                except Exception:
-                    pass
-
-        # Also clean any legacy worker caches that landed in log/ (pre-fix runs)
+                except Exception as exc:
+                    logger.debug("Worker cache cleanup failed for %s: %s", p, exc)
         log_dir = Path(__file__).resolve().parents[2] / "log"
         for log_exp in log_dir.iterdir():
             if not log_exp.is_dir():
@@ -579,10 +577,8 @@ def _cleanup_experiment_caches() -> None:
                         shutil.rmtree(wc, ignore_errors=True)
                         removed += 1
                         freed += size
-                    except Exception:
-                        pass
-
-        if removed:
+                    except Exception as exc:
+                        logger.debug("Legacy cache cleanup failed for %s: %s", wc, exc)
             logger.info(f"Auto-cleanup: removed {removed} worker cache dirs "
                         f"({freed / 1024**3:.2f} GB freed)")
 
@@ -605,9 +601,8 @@ def _cleanup_experiment_caches() -> None:
                         shutil.rmtree(ws_dir, ignore_errors=True)
                         ws_removed += 1
                         ws_freed += size
-                except Exception:
-                    pass
-        if ws_removed:
+                except Exception as exc:
+                    logger.debug("Workspace cleanup failed for %s: %s", ws_dir, exc)
             logger.info(f"Auto-cleanup: removed {ws_removed} stale workspace dirs "
                         f"({ws_freed / 1024**3:.2f} GB freed)")
     except Exception as e:
@@ -666,8 +661,8 @@ def main(path=None, step_n=100, direction=None, stop_event=None, config_path=Non
                     if removed:
                         logger.info(f"Periodic workspace cleanup ({ws_root.name}): {removed} dirs removed "
                                     f"({freed/1024**3:.2f} GB freed)")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Periodic workspace cleanup error: %s", exc)
 
     _ws_thread = _threading.Thread(target=_periodic_workspace_cleanup, daemon=True, name="ws-cleaner")
     _ws_thread.start()

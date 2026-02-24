@@ -356,8 +356,11 @@ class ChatSession:
         return self.conversation_id
 
     def display_history(self) -> None:
-        # TODO: Realize a beautiful presentation format for history messages
-        pass
+        messages = SessionChatHistoryCache().message_get(self.conversation_id)
+        for msg in messages:
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")[:120]
+            logger.info(f"[{role}] {content}")
 
 
 class APIBackend:

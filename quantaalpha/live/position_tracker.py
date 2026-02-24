@@ -266,7 +266,7 @@ class PositionTracker:
             try:
                 records.append(json.loads(path.read_text()))
             except Exception:
-                pass
+                continue  # skip corrupt PnL files
         return records[-days:] if len(records) > days else records
 
     def summary(self) -> Dict:

@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 # ---------------------------------------------------------------------------
 # Resolve backend path so we can import live_routes directly
 # ---------------------------------------------------------------------------
-BACKEND_DIR = Path(__file__).parent.parent / "frontend-v2" / "backend"
+BACKEND_DIR = Path(__file__).resolve().parents[2] / "frontend-v2" / "backend"
 sys.path.insert(0, str(BACKEND_DIR))
 
 from live_routes import router, _scheduler_status, _load_json_safe, _latest_orders_file

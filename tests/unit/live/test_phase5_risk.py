@@ -407,7 +407,7 @@ class TestRetrainScript:
 
     def test_update_live_yaml_sets_meta_path(self, tmp_path):
         import sys
-        scripts_dir = Path(__file__).parent.parent / "scripts"
+        scripts_dir = Path(__file__).resolve().parents[3] / "scripts"
         sys.path.insert(0, str(scripts_dir))
         from retrain_us_model import _update_live_yaml
 
@@ -422,7 +422,7 @@ class TestRetrainScript:
 
     def test_update_live_yaml_creates_model_key_if_missing(self, tmp_path):
         import sys
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
         from retrain_us_model import _update_live_yaml
 
         live_yaml = tmp_path / "live.yaml"
@@ -433,7 +433,7 @@ class TestRetrainScript:
 
     def test_retrain_dry_run_writes_placeholder_meta(self, tmp_path):
         import sys
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
         import retrain_us_model as rm
 
         config_path = tmp_path / "backtest_us.yaml"
@@ -462,7 +462,7 @@ class TestRetrainScript:
 
     def test_retrain_missing_factor_json_raises(self, tmp_path):
         import sys
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
         import retrain_us_model as rm
 
         config_path = tmp_path / "backtest_us.yaml"
@@ -478,7 +478,7 @@ class TestRetrainScript:
 
     def test_retrain_nonexistent_factor_json_raises(self, tmp_path):
         import sys
-        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
         import retrain_us_model as rm
 
         config_path = tmp_path / "backtest_us.yaml"

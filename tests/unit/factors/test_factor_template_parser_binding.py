@@ -5,7 +5,7 @@ import pandas as pd
 
 
 TEMPLATE_PATH = (
-    Path(__file__).resolve().parents[1]
+    Path(__file__).resolve().parents[3]
     / "quantaalpha"
     / "factors"
     / "coder"

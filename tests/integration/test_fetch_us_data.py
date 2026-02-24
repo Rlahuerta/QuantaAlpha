@@ -31,7 +31,7 @@ import pytest
 # Import the script as a module (scripts/ is not a package)
 # ---------------------------------------------------------------------------
 
-_SCRIPT = Path(__file__).parent.parent / "scripts" / "fetch_us_data.py"
+_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "fetch_us_data.py"
 
 def _load_script() -> types.ModuleType:
     spec = importlib.util.spec_from_file_location("fetch_us_data", _SCRIPT)

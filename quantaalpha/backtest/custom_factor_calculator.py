@@ -708,7 +708,7 @@ def get_qlib_stock_data(config: Dict) -> pd.DataFrame:
     try:
         qlib.init(provider_uri=provider_uri, region=region)
     except Exception:
-        pass  # Already initialized
+        pass  # qlib already initialized
     
     start_time = data_config.get('start_time', '2016-01-01')
     end_time = data_config.get('end_time', '2025-12-31')

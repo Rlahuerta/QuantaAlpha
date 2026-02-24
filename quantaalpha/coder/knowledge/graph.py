@@ -183,8 +183,6 @@ class UndirectedGraph(Graph):
         -------
 
         """
-        if content == "Model":
-            pass
         match = self.semantic_search(node=content, similarity_threshold=0.999)
         if match:
             return match[0]
