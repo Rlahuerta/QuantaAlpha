@@ -444,13 +444,17 @@ def generate_chain_report(
                 else:
                     infeasible_buys.append(o)
 
-            # Buy slots = space left under the topk cap after keeping held positions.
-            # Only count positions already in the (truncated) target — not every brokerage position.
-            sold_tickers = {o["ticker"] for o in sells_sorted}
-            n_kept = sum(1 for t in target if t in prev_pos and t not in sold_tickers)
+            # Buy slots = space remaining under the topk cap.
+            # n_kept = target stocks ALREADY HELD (includes HOLD and REDUCE — both keep the ticker).
+            # Only SELL ALL removes a ticker; REDUCE keeps it.
+            # buy_slots applies only to BUY NEW (new ticker); ADD (existing ticker) never uses a slot.
+            n_kept = sum(1 for t in target if t in prev_pos)
             buy_slots  = max(0, topk - n_kept)
-            buys_show  = feasible_buys[:buy_slots]
-            buys_over  = feasible_buys[buy_slots:]  # would breach topk cap → truly skipped
+            # Split feasible buys: ADD (ticker already held, no slot needed) vs BUY NEW (needs a slot)
+            add_feasible = [o for o in feasible_buys if o.get("ticker", "") in prev_pos]
+            new_feasible = [o for o in feasible_buys if o.get("ticker", "") not in prev_pos]
+            buys_show  = add_feasible + new_feasible[:buy_slots]
+            buys_over  = new_feasible[buy_slots:]  # would breach topk cap → truly skipped
 
             A("| Flow | Ticker | Shares | Price | Trade Value | Cash Balance |")
             A("|------|--------|--------|-------|-------------|--------------|")
