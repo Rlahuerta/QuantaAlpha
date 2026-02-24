@@ -721,6 +721,9 @@ class APIBackend:
                 # Wait before retry to avoid rate limit
                 if i < max_retry - 1:
                     time.sleep(self.retry_wait_seconds)
+            except (ValueError, TypeError) as e:
+                # Configuration errors — retrying won't help
+                raise
             except Exception as e:  # noqa: BLE001
                 logger.warning(e)
                 logger.warning(f"Retrying {i+1}th time...")
@@ -732,6 +735,11 @@ class APIBackend:
     def _create_embedding_inner_function(
         self, input_content_list: list[str], **kwargs: Any
     ) -> list[Any]:  # noqa: ARG002
+        if not self.embedding_model:
+            raise ValueError(
+                "No EMBEDDING_MODEL configured. Set the EMBEDDING_MODEL "
+                "environment variable (e.g. 'ollama/mxbai-embed-large')."
+            )
         content_to_embedding_dict = {}
         filtered_input_content_list = []
         if self.use_embedding_cache:

@@ -55,7 +55,10 @@ class _FakeFactorRegulator:
 
 
 def _build_evaluator(monkeypatch):
-    monkeypatch.setattr(evaluators_module, "FactorRegulator", _FakeFactorRegulator)
+    monkeypatch.setattr(
+        "quantaalpha.factors.regulator.factor_regulator.FactorRegulator",
+        _FakeFactorRegulator,
+    )
     return FactorEvaluatorForCoder(scen=None)
 
 

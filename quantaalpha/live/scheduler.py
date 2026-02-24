@@ -175,12 +175,40 @@ class TradingScheduler:
         orders_dir.mkdir(parents=True, exist_ok=True)
         today = date.today().isoformat()
         orders_file = orders_dir / f"pending_orders_{today}.json"
+
+        # Per-position P&L for the report
+        position_pnl: Dict[str, Dict] = {}
+        for ticker, shares in current_positions.items():
+            p0 = (prices_yesterday or prices_today).get(ticker)
+            p1 = prices_today.get(ticker)
+            if p0 and p1 and p0 > 0:
+                pnl_val = shares * (p1 - p0)
+                position_pnl[ticker] = {
+                    "shares": shares,
+                    "price_start": round(p0, 2),
+                    "price_end": round(p1, 2),
+                    "pnl": round(pnl_val, 2),
+                }
+
         order_data: Dict[str, Any] = {
             "date": today,
             "as_of": today,
             "scores_count": len(scores),
             "daily_pnl": daily_pnl,
             "account_value": round(account_value, 2),
+            "cash": day_state.get("cash", 0.0),
+            "previous_positions": current_positions,
+            "prices": {
+                t: round(prices_today[t], 2)
+                for t in set(list(current_positions) + list(result.target_portfolio))
+                if t in prices_today
+            },
+            "benchmark_return": round(benchmark_return, 6),
+            "cumulative_pnl": day_state.get("pnl", {}).get("cumulative_pnl", 0.0),
+            "cumulative_excess_return": day_state.get("pnl", {}).get(
+                "cumulative_excess_return", 0.0
+            ),
+            "position_pnl": position_pnl,
             "orders": [
                 {
                     "ticker": o.ticker,

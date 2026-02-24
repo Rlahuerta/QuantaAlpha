@@ -166,7 +166,7 @@ class TrajectoryPool:
                         If False, load existing data from save_path.
         """
         self.save_path = Path(save_path) if save_path else None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._trajectories: dict[str, StrategyTrajectory] = {}
         self._by_direction: dict[int, list[str]] = {}  # direction_id -> [traj_ids]
         self._by_phase: dict[RoundPhase, list[str]] = {p: [] for p in RoundPhase}

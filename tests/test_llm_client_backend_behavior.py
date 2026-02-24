@@ -386,6 +386,7 @@ def test_embedding_inner_function_batches_and_uses_cache(monkeypatch, _patch_llm
         use_embedding_cache=True,
         dump_embedding_cache=True,
     )
+    backend.embedding_model = "test-embed-model"
     call_inputs = []
 
     def _fake_embedding_create(model, input):

@@ -368,7 +368,20 @@ def test_rag_v2_generate_knowledge_and_query_dispatch_paths(monkeypatch):
     assert queried.success_task_to_knowledge_dict == kb.success_task_to_knowledge_dict
 
 
-def test_knowledge_base_v2_init_components_and_query_noop_path():
+def test_knowledge_base_v2_init_components_and_query_noop_path(monkeypatch):
+    # Mock create_embedding to avoid requiring a real EMBEDDING_MODEL / API.
+    # Use a deterministic non-zero vector keyed by content so cosine similarity
+    # between identical strings is 1.0 (above the 0.999 threshold).
+    import hashlib
+
+    def _fake_embedding(self):
+        h = hashlib.md5(self.content.encode()).digest()
+        self.embedding = [float(b) / 255.0 + 0.01 for b in h[:8]]
+
+    monkeypatch.setattr(
+        "quantaalpha.coder.knowledge.vector_base.KnowledgeMetaData.create_embedding",
+        _fake_embedding,
+    )
     kb = CoSTEERKnowledgeBaseV2(init_component_list=["component-init-a"])
     node = kb.graph_get_node_by_content("component-init-a")
     assert node is not None
