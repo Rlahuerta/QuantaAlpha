@@ -342,7 +342,94 @@ def test_cash_negative_warning_banner():
     assert "$-" not in md
 
 
-def test_cash_floor_in_strategy_params():
+def test_invalid_sell_skipped_no_position():
+    """Sell order for a stock not in previous_positions is skipped with ⛔ note."""
+    day = {
+        "date": "2026-03-01",
+        "account_value": 1_000_000.0,
+        "daily_pnl": 0.0,
+        "orders": [
+            {"ticker": "NOTOWNED", "shares": -100, "action": "sell", "price": 200.0},
+            {"ticker": "VALID", "shares": 100, "action": "buy", "price": 100.0},
+        ],
+        "target_positions": {"VALID": 100},
+        "previous_positions": {},   # NOTOWNED never held
+        "prices": {"NOTOWNED": 200.0, "VALID": 100.0},
+        "position_pnl": {},
+    }
+    md = generate_chain_report([day], initial_capital=1_000_000.0, topk=10)
+    assert "sell order(s) skipped" in md
+    assert "no prior position held" in md
+    assert "NOTOWNED" in md
+    # The sell should NOT generate cash in the waterfall
+    # Opening $1M, only the valid buy executes: $1M - $10k = $990k closing
+    assert "$990,000.00" in md
+
+
+def test_invalid_sell_does_not_generate_cash():
+    """Cash waterfall must not include proceeds from sells of unheld stocks."""
+    day = {
+        "date": "2026-03-01",
+        "account_value": 1_000_000.0,
+        "daily_pnl": 0.0,
+        "orders": [
+            # Invalid sell: ghost $500k stock, never held
+            {"ticker": "GHOST", "shares": -1000, "action": "sell", "price": 500.0},
+        ],
+        "target_positions": {},
+        "previous_positions": {},
+        "prices": {"GHOST": 500.0},
+        "position_pnl": {},
+    }
+    md = generate_chain_report([day], initial_capital=100_000.0, topk=10)
+    # Cash should NOT jump to $600k — stays at $100k (no valid trades)
+    assert "$600,000.00" not in md
+    assert "sell order(s) skipped" in md
+
+
+def test_valid_sell_generates_cash():
+    """A sell for a stock that IS held should still generate cash normally."""
+    day = {
+        "date": "2026-03-01",
+        "account_value": 1_000_000.0,
+        "daily_pnl": 0.0,
+        "orders": [
+            {"ticker": "HELD", "shares": -100, "action": "sell", "price": 200.0},
+        ],
+        "target_positions": {},
+        "previous_positions": {"HELD": 100},  # actually held
+        "prices": {"HELD": 200.0},
+        "position_pnl": {},
+    }
+    md = generate_chain_report([day], initial_capital=800_000.0, topk=10)
+    # Opening $800k, sell HELD +$20k → $820k
+    assert "$820,000.00" in md
+    assert "sell order(s) skipped" not in md
+
+
+def test_holds_shown_when_all_buys_infeasible():
+    """When all buys are infeasible, previously held stocks show as Hold."""
+    held_stocks = {f"S{i:02d}": 100 for i in range(5)}
+    day = {
+        "date": "2026-03-01",
+        "account_value": 1_000_000.0,
+        "daily_pnl": 0.0,
+        "orders": [
+            # ADD orders for already-held stocks — all infeasible with $1 cash
+            {"ticker": k, "shares": 50, "action": "buy", "price": 100_000.0}
+            for k in held_stocks
+        ],
+        "target_positions": held_stocks,
+        "previous_positions": held_stocks,
+        "prices": {k: 100_000.0 for k in held_stocks},
+        "position_pnl": {},
+    }
+    # Only $1 available — all buys infeasible
+    md = generate_chain_report([day], initial_capital=1.0, topk=10)
+    assert "Hold" in md
+    assert "buy order(s) skipped" in md
+
+
     """Block #0 strategy parameters show the configured cash reserve floor."""
     md = generate_chain_report([], initial_capital=1_000_000.0, min_cash_pct=0.10)
     assert "Cash reserve floor" in md

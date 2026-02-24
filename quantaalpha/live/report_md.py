@@ -402,27 +402,32 @@ def generate_chain_report(
         # ── Orders & cash flow ────────────────────────────────────────
         sells = [o for o in orders if o.get("action") == "sell"]
         buys  = [o for o in orders if o.get("action") == "buy"]
-        holds = [t for t in target
-                 if t in prev_pos
-                 and t not in {o["ticker"] for o in orders}]
+
+        # Split sells: valid = ticker actually held; invalid = no position → skip
+        valid_sells   = [o for o in sells if o.get("ticker", "") in prev_pos]
+        invalid_sells = [o for o in sells if o.get("ticker", "") not in prev_pos]
+
+        # Holds = in target AND held AND NOT part of executed trades.
+        # Use executed_tickers (filled below) rather than raw orders so that
+        # infeasible buys and invalid sells don't mask held positions.
 
         if orders:
             A("### 💸 Orders & Cash Flow")
             A("")
 
-            # Sort sells largest-first, buys largest-first (by value)
+            # Sort valid sells largest-first, buys largest-first (by value)
             def _order_val(o: Dict) -> float:
                 t = o.get("ticker", "")
                 sh = abs(int(o.get("shares") or 0))
                 px = float(o.get("price") or prices.get(t, 0))
                 return sh * px
 
-            sells_sorted = sorted(sells, key=_order_val, reverse=True)
+            sells_sorted = sorted(valid_sells, key=_order_val, reverse=True)
             buys_sorted  = sorted(buys,  key=_order_val, reverse=True)
 
-            # Pre-simulate sells → buys to classify each buy as feasible/infeasible.
-            # This prevents the waterfall from ever showing negative cash; buys that
-            # would overdraw are shown as a collapsed note after the table.
+            # Pre-simulate valid sells → buys to classify each buy as
+            # feasible/infeasible. Prevents the waterfall from showing
+            # negative cash; infeasible buys collapse into a ⛔ note.
             sim_cash = prev_cash
             for o in sells_sorted:
                 sim_cash += _order_val(o)
@@ -494,7 +499,17 @@ def generate_chain_report(
               f"**{_usd(running_cash)}**{closing_flag} |")
             A("")
 
-            # Note about infeasible buy orders (skipped to prevent negative cash)
+            # Note: invalid sells (no prior position held) — skipped from cash
+            if invalid_sells:
+                total_inv = sum(_order_val(o) for o in invalid_sells)
+                inv_tks = ", ".join(o["ticker"] for o in invalid_sells[:8])
+                if len(invalid_sells) > 8:
+                    inv_tks += f" *(+{len(invalid_sells) - 8} more)*"
+                A(f"> ⛔ **{len(invalid_sells)} sell order(s) skipped** — no prior position held "
+                  f"({_usd(total_inv)} notional). Skipped: {inv_tks}")
+                A("")
+
+            # Note: infeasible buy orders (skipped to prevent negative cash)
             if infeasible_buys:
                 total_skipped = sum(_order_val(o) for o in infeasible_buys)
                 sk_tickers = ", ".join(o["ticker"] for o in infeasible_buys[:8])
@@ -516,9 +531,14 @@ def generate_chain_report(
                   f"({_usd(cash_floor)}).")
                 A("")
 
+            # Holds = in target AND held AND NOT executed this block
+            executed_tickers = {o["ticker"] for o in sells_sorted + feasible_buys}
+            holds = [t for t in target if t in prev_pos and t not in executed_tickers]
+
             prev_cash = running_cash
         else:
-            # No trades
+            # No trades — all held positions unchanged
+            holds = [t for t in target if t in prev_pos]
             A("### 💸 Orders & Cash Flow")
             A("")
             A(f"> **No rebalancing orders.** All {len(holds)} positions held unchanged.")
