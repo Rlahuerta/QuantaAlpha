@@ -91,6 +91,7 @@ class LoopBase:
         self.step_idx = 0  # the index of next step to be run
         self.loop_prev_out = {}  # the step results of current loop
         self.loop_trace = defaultdict(list[LoopTrace])  # the key is the number of loop
+        self._max_trace_loops = 200  # cap retained trace history
         self.session_folder = logger.log_trace_path / "__session__"
 
     def run(self, step_n: int | None = None, stop_event: threading.Event = None):
@@ -140,6 +141,11 @@ class LoopBase:
                 end = datetime.datetime.now(datetime.timezone.utc)
 
                 self.loop_trace[li].append(LoopTrace(start, end))
+
+                # Evict oldest traces to bound memory
+                if len(self.loop_trace) > self._max_trace_loops:
+                    oldest = min(self.loop_trace)
+                    del self.loop_trace[oldest]
 
                 # Update tqdm progress bar
                 pbar.set_postfix(loop_index=li, step_index=si, step_name=name)

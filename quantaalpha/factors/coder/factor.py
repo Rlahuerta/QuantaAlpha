@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Tuple, Union, Optional
 
 import pandas as pd
-from filelock import FileLock
+from filelock import FileLock, Timeout
 
 from quantaalpha.coder.costeer.task import CoSTEERTask
 from quantaalpha.factors.coder.config import FACTOR_COSTEER_SETTINGS
@@ -172,7 +172,7 @@ class FactorFBWorkspace(FBWorkspace):
                     result=None,
                     error=CodeFormatError(self.FB_CODE_NOT_SET)
                 )
-        with FileLock(self.workspace_path / "execution.lock"):
+        with FileLock(self.workspace_path / "execution.lock", timeout=300):
             # Set data path for all versions
             source_data_path = (
                 Path(
