@@ -363,7 +363,6 @@ class CoSTEERRAGStrategyV2(RAGStrategy):
             )
             if match:
                 error_details = match.groupdict()
-                # last_traceback = f'File "{error_details["file"]}", line {error_details["line"]}, in {error_details["function"]}\n    {error_details["error_line"]}'
                 error_type = error_details["error_type"]
                 error_line = error_details["error_line"]
                 error_contents = [f"ErrorType: {error_type}" + "\n" + f"Error line: {error_line}"]
@@ -649,20 +648,6 @@ class CoSTEERRAGStrategyV2(RAGStrategy):
                             count += 1
                         if count >= single_error_constraint:
                             break
-
-                # for error_node in last_knowledge_error_analysis_result:
-                #     if not isinstance(error_node, UndirectedNode):
-                #         error_node = self.knowledgebase.graph_get_node_by_content(content=error_node)
-                #         if error_node is None:
-                #             continue
-                #     for searched_node in self.knowledgebase.graph_query_by_node(
-                #         node=error_node,
-                #         step=1,
-                #         constraint_labels=["task_trace"],
-                #         block=True,
-                #     ):
-                #         if searched_node not in [node[0] for node in task_trace_node_list]:
-                #             task_trace_node_list.append((searched_node, error_node.content))
 
                 same_error_success_knowledge_pair_list = []
                 same_error_success_node_set = set()

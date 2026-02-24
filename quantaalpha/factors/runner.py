@@ -20,19 +20,6 @@ from quantaalpha.factors.experiment import QlibFactorExperiment
 DIRNAME = Path(__file__).absolute().resolve().parent
 DIRNAME_local = Path.cwd()
 
-# class QlibFactorExpWorkspace:
-
-#     def prepare():
-#         # create a folder;
-#         # copy template
-#         # place data inside the folder `combined_factors`
-#         #
-#     def execute():
-#         de = DockerEnv()
-#         de.run(local_path=self.ws_path, entry="qrun conf.yaml")
-
-# TODO: supporting multiprocessing and keep previous results
-
 
 class QlibFactorRunner(CachedRunner[QlibFactorExperiment]):
     """
@@ -112,21 +99,6 @@ class QlibFactorRunner(CachedRunner[QlibFactorExperiment]):
                 keep_cols.append(col)
 
         return factors_df[keep_cols]
-        # calculate the IC between each column of SOTA_feature and new_feature
-        # if the IC is larger than a threshold, remove the new_feature column
-        # return the new_feature
-
-        concat_feature = pd.concat([SOTA_feature, new_feature], axis=1)
-        IC_max = (
-            concat_feature.groupby("datetime")
-            .parallel_apply(
-                lambda x: self.calculate_information_coefficient(x, SOTA_feature.shape[1], new_feature.shape[1])
-            )
-            .mean()
-        )
-        IC_max.index = pd.MultiIndex.from_product([range(SOTA_feature.shape[1]), range(new_feature.shape[1])])
-        IC_max = IC_max.unstack().max(axis=0)
-        return new_feature.iloc[:, IC_max[IC_max < 0.70].index]
 
     @cache_with_pickle(CachedRunner.get_cache_key, CachedRunner.assign_cached_result)
     def develop(self, exp: QlibFactorExperiment, use_local: bool = True) -> QlibFactorExperiment:

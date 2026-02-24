@@ -99,7 +99,6 @@ class FactorCodeEvaluator(FactorEvaluator):
         )
 
         execution_feedback_to_render = execution_feedback
-        # import pdb; pdb.set_trace()
         for _ in range(10):  # 10 times to split the content is enough
             user_prompt = (
                 Environment(undefined=StrictUndefined)
@@ -421,15 +420,11 @@ class FactorValueEvaluator(FactorEvaluator):
         conclusions = []
 
         # Initialize result variables
-        row_result = 0
+        row_result = None
         index_result = 0
         output_format_result = None
         equal_value_ratio_result = 0
         high_correlation_result = False
-        row_result = None
-        
-        # import pdb; pdb.set_trace()
-
         # Check if both dataframe has only one columns Mute this since factor task might generate more than one columns now
         if version == 1:
             feedback_str, _ = FactorSingleColumnEvaluator(self.scen).evaluate(implementation, gt_implementation)

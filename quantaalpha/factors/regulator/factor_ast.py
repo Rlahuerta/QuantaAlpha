@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from typing import List, Union, Optional as Opt
 from collections import defaultdict
 import sys
-import pandas as pd
 
 # Enable packrat parsing for better performance
 ParserElement.enable_packrat()
@@ -572,35 +571,8 @@ def count_nodes(node: Node) -> int:
 if __name__ == "__main__":
     expr1 = "(($close - TS_MIN($low, 14)) / (TS_MAX($high, 14) - TS_MIN($low, 14) + 1e-8))"
     count = count_free_args(expr1)
-    print(f"Number of NumberNode instances in expression: {count}")  # Should print 3 (14, 1e-8, and 100)
+    print(f"Number of NumberNode instances in expression: {count}")
     count = count_unique_vars(expr1)
-    print(f"Number of unique variables in expression: {count}")  
+    print(f"Number of unique variables in expression: {count}")
     count = count_all_nodes(expr1)
-    print(f"Number of Node instances in expression: {count}") 
-
-# if __name__ == "__main__":
-#     # Test cases
-#     expr1 = "(($close - TS_MIN($low, 14)) / (TS_MAX($high, 14) - TS_MIN($low, 14) + 1e-8)) * 100"
-#     expr2 = "(TS_MAX($high, 14) - TS_MIN($low, 14)) * STD($close, 20) / MEAN($volume, 10)"
-#     match = compare_expressions(expr1, expr2)
-#     factor_df = pd.read_csv("factor_zoo/alpha101.csv", index_col=None)
-    
-    
-#     max_size = 0
-#     matched_subtree = None
-#     matched_alpha = None
-#     for index, (name, alpha_expr) in factor_df.iterrows():
-#         try:
-#             match = compare_expressions(expr1, alpha_expr)
-#             if match is not None and match.size > max_size:
-#                  max_size = match.size
-#                  matched_subtree = match.root1
-#                  matched_alpha = alpha_expr
-#         except Exception as e:
-#             print(f"Error comparing alpha \"{alpha_expr}\": \n {e}")
-            
-
-                 
-#     print(max_size)
-#     print(matched_subtree)
-#     print(matched_alpha)
+    print(f"Number of Node instances in expression: {count}")

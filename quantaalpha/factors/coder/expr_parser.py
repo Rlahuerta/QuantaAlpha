@@ -38,7 +38,6 @@ def is_number(s):
 
 # Flatten nested ParseResults to strings
 def flatten_nested_tokens(tokens):
-    # import pdb; pdb.set_trace()
     flattened = []
     for token in tokens:
         if isinstance(token, str):
@@ -76,40 +75,14 @@ def parse_arith_op(s, loc, tokens):
         else:
             if op == '+':
                 return f'ADD({A}, {B})'
-                # return f'np.add({A}, {B})'
             elif op == '-':
                 return f'SUBTRACT({A}, {B})'
-                # return f'np.subtract({A}, {B})'
             elif op == '*':
                 return f'MULTIPLY({A}, {B})'
-                # return f'np.multiply({A}, {B})'
             elif op == '/':
                 return f'DIVIDE({A}, {B})'
-                # return f'np.divide({A}, {B})'
             else:
                 raise NotImplementedError(f'arith op \'{op}\' is not implemented')
-            # if 'BENCHMARKINDEX' in A and 'BENCHMARKINDEX' not in B:
-            #     if op == '+':
-            #         return f'({B}).add({A}, axis=0)'
-            #     elif op == '-':
-            #         return f'(-1*{(B)}).add({A}, axis=0)'
-            #     elif op == '*':
-            #         return f'({B}).mul({A}, axis=0)'
-            #     elif op == '/':
-            #         return f'(1/{(B)}).mul({A}, axis=0)'
-            #     else:
-            #         raise NotImplementedError(f'arith op \'{op}\' is not implemented')
-            # else:
-            #     if op == '+':
-            #         return f'({A}).add({B}, axis=0)'
-            #     elif op == '-':
-            #         return f'({A}).sub({B}, axis=0)'
-            #     elif op == '*':
-            #         return f'({A}).mul({B}, axis=0)'
-            #     elif op == '/':
-            #         return f'({A}).div({B}, axis=0)'
-            #     else:
-            #         raise NotImplementedError(f'arith op \'{op}\' is not implemented')
     
     return recursive_build_expression(tokens[0])
 
@@ -186,11 +159,7 @@ def parse_function_call(s, loc, tokens):
     # unary_operator = tokens[0]
     function_name = tokens[0]
     arguments = tokens[2:-1] 
-    # import pdb; pdb.set_trace()
-
-
     arguments_flat = []
-    # import pdb; pdb.set_trace()
     for arg in arguments:
         if isinstance(arg, str):
             arguments_flat.append(arg)
@@ -209,12 +178,7 @@ nested_expr = Group('(' + expr + ')')
 
 operand =  Group(unary_op + (function_call | var | number | nested_expr | expr))
 
-# unary_operand = one_of("+ -") + operand
-# unary_operand.setParseAction(lambda tokens: ''.join(tokens))
-# operand = (unary_operand | function_call | var | number )
-
 def parse_entire_expression(s, loc, tokens):
-    # import pdb; pdb.set_trace()
     return ''.join(flatten_nested_tokens(tokens))
 
 

@@ -410,7 +410,6 @@ class DockerEnv(Env[DockerConf]):
         if env is None:
             env = {}
         client = docker.from_env()
-        # import pdb; pdb.set_trace()
         volumns = {}
         if local_path is not None:
             local_path = os.path.abspath(local_path)

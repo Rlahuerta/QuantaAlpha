@@ -707,7 +707,6 @@ class APIBackend:
         max_retry = LLM_SETTINGS.max_retry if LLM_SETTINGS.max_retry is not None else max_retry
         for i in range(max_retry):
             try:
-                # import pdb; pdb.set_trace()
                 if embedding:
                     return self._create_embedding_inner_function(**kwargs)
                 if chat_completion:
