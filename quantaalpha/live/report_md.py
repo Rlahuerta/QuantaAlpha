@@ -1,63 +1,411 @@
-"""Markdown trading report generator.
+"""Markdown trading report generator — chain-of-blocks format.
 
-Produces a self-contained Markdown file per trading day that is:
-- Readable in any Markdown viewer (GitHub, VS Code, terminal ``cat``)
-- Persistent (one file per day — full audit trail)
-- Printable as plain text (Markdown tables look fine without rendering)
-- Actionable — a trader can execute all orders from the SELL/BUY tables
-  in the Executive Summary without reading the rest
+Produces a single Markdown file that reads like a blockchain ledger:
+one self-contained block per trading day, each block showing:
 
-Output: ``data/live/reports/report_{date}.md``
+  • Overnight P&L attribution (per-position price movements)
+  • Rebalancing orders with a running cash-flow waterfall
+  • End-of-day snapshot (portfolio / cash / total account)
+
+The **current day** block also lists the algorithm's top-N picks with
+weights so the trader can see exactly which stocks are selected and why.
+
+Output: ``data/live/reports/trading_journal.md``
 
 Usage::
 
-    from quantaalpha.live.report_md import generate_report, save_report
+    from quantaalpha.live.report_md import generate_chain_report, save_chain_report
 
-    md_text = generate_report(order_data, ledger=ledger_rows)
-    path = save_report(order_data, ledger=ledger_rows)
-    print(md_text)        # pipe-safe plain text
+    md = generate_chain_report(days_list, initial_capital=1_000_000, topk=10)
+    path = save_chain_report("data/live", topk=10)
+    print(md)          # pipe-safe plain text, Markdown renders nicely
 """
 
 from __future__ import annotations
 
+import glob
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
-# ── Helpers ──────────────────────────────────────────────────────────
+# ── Formatting helpers ────────────────────────────────────────────────
 
-def _fmt_usd(value: float, signed: bool = False) -> str:
-    sign = "+" if signed and value >= 0 else ""
-    return f"{sign}${value:,.2f}"
-
-
-def _fmt_pct(value: float, signed: bool = False) -> str:
-    sign = "+" if signed and value >= 0 else ""
-    return f"{sign}{value * 100:.2f}%"
+def _usd(v: float, signed: bool = False) -> str:
+    prefix = "+" if signed and v >= 0 else ""
+    return f"{prefix}${v:,.2f}"
 
 
-def _pnl_badge(value: float, fmt: str = "usd") -> str:
-    """Return a value with a +/- sign; caller decides colour in their renderer."""
-    if fmt == "pct":
-        return _fmt_pct(value, signed=True)
-    return _fmt_usd(value, signed=True)
+def _pct(v: float, signed: bool = False) -> str:
+    prefix = "+" if signed and v >= 0 else ""
+    return f"{prefix}{v * 100:.2f}%"
 
 
-def _trend(rows: List[Dict], col: str) -> str:
-    """Last-3-day trend arrow: ↑ ↓ →"""
-    vals = [float(r.get(col, 0) or 0) for r in rows[-3:]]
-    if len(vals) < 2:
-        return "→"
-    delta = vals[-1] - vals[-2]
-    if delta > 1e-4:
-        return "↑"
-    elif delta < -1e-4:
-        return "↓"
-    return "→"
+def _sign(v: float) -> str:
+    return "+" if v >= 0 else ""
 
 
-# ── Core generator ───────────────────────────────────────────────────
+def _action_icon(action: str, is_new: bool, is_full_exit: bool) -> str:
+    if action == "sell":
+        return "🔴 SELL ALL" if is_full_exit else "🟡 REDUCE"
+    if action == "buy":
+        return "🟢 BUY NEW" if is_new else "🔵 ADD"
+    return "⏸ HOLD"
+
+
+# ── Order file loader ─────────────────────────────────────────────────
+
+def load_all_orders(orders_dir: str | Path) -> List[Dict[str, Any]]:
+    """Load all ``pending_orders_*.json`` files, deduplicated by date.
+
+    Files in the live directory take precedence over archived copies
+    (same date = live file wins).  Returns list sorted oldest → newest.
+    """
+    orders_dir = Path(orders_dir)
+    archive_dir = orders_dir / "archive"
+
+    by_date: Dict[str, Dict] = {}
+
+    # Load archive first (lower priority)
+    if archive_dir.exists():
+        for path in sorted(archive_dir.glob("pending_orders_*.json")):
+            try:
+                d = json.loads(path.read_text())
+                date = d.get("date")
+                if date:
+                    by_date[date] = d
+            except Exception:
+                continue
+
+    # Live files override archive
+    for path in sorted(orders_dir.glob("pending_orders_*.json")):
+        try:
+            d = json.loads(path.read_text())
+            date = d.get("date")
+            if date:
+                by_date[date] = d
+        except Exception:
+            continue
+
+    return [by_date[k] for k in sorted(by_date)]
+
+
+# ── Chain report generator ────────────────────────────────────────────
+
+def generate_chain_report(
+    days: List[Dict[str, Any]],
+    *,
+    initial_capital: float = 1_000_000.0,
+    topk: int = 10,
+    generated_at: Optional[datetime] = None,
+) -> str:
+    """Generate a day-by-day chained trading journal.
+
+    Parameters
+    ----------
+    days:
+        List of order-data dicts sorted oldest → newest.
+        Each dict is a ``pending_orders_{date}.json`` payload.
+    initial_capital:
+        Starting cash (used for the initial block).
+    topk:
+        Number of algorithm picks to show in the current-day section.
+    generated_at:
+        Footer timestamp (default: UTC now).
+
+    Returns
+    -------
+    str
+        Full Markdown text.
+    """
+    ts = generated_at or datetime.now(timezone.utc)
+    lines: List[str] = []
+    A = lines.append
+
+    # ── Title & header ────────────────────────────────────────────────
+    A("# QuantaAlpha — Trading Journal")
+    A("")
+    A(f"*Generated: {ts.strftime('%Y-%m-%d %H:%M')} UTC* &nbsp;|&nbsp; "
+      f"*Strategy: TopkDropout (topk={topk})* &nbsp;|&nbsp; "
+      f"*Initial Capital: {_usd(initial_capital)}*")
+    A("")
+    A("---")
+    A("")
+
+    # ── Block #0 — Initial state ──────────────────────────────────────
+    A("## 🏁 Block #0 — Initial State")
+    A("")
+    A("| | |")
+    A("|---|---|")
+    A(f"| **Capital** | {_usd(initial_capital)} |")
+    A(f"| **Positions** | None — 100% cash |")
+    A(f"| **Strategy** | TopkDropout: hold top-{topk} by model score, "
+      "drop 1 per rebalance |")
+    A("")
+
+    # Running account state across blocks
+    prev_account = initial_capital
+    prev_cash = initial_capital           # all cash before any trades
+    prev_target: Dict[str, int] = {}      # no positions initially
+    cumulative_pnl = 0.0
+
+    # ── One block per day ─────────────────────────────────────────────
+    for block_num, day in enumerate(days, 1):
+        date_str = day.get("date", f"day-{block_num}")
+        account = float(day.get("account_value") or prev_account)
+        daily_pnl = float(day.get("daily_pnl") or 0.0)
+        # Carry initial capital through if not set
+        init_cap = float(day.get("initial_capital") or initial_capital)
+        total_return = (account - init_cap) / init_cap if init_cap else 0.0
+
+        orders: List[Dict] = day.get("orders") or []
+        target: Dict[str, int] = day.get("target_positions") or {}
+        prev_pos: Dict[str, int] = day.get("previous_positions") or prev_target
+        prices: Dict[str, float] = dict(day.get("prices") or {})
+        pos_pnl: Dict[str, Dict] = day.get("position_pnl") or {}
+        bench = float(day.get("benchmark_return") or 0.0)
+        cum_excess = float(day.get("cumulative_excess_return") or 0.0)
+        cash_eod = day.get("cash")  # may be None for older files
+
+        # Backfill prices from order dicts (always available)
+        for o in orders:
+            t = o.get("ticker", "")
+            px = float(o.get("price") or 0.0)
+            if t and px and t not in prices:
+                prices[t] = px
+
+        daily_ret = daily_pnl / (account - daily_pnl) if (account - daily_pnl) != 0 else 0.0
+        excess_today = daily_ret - bench
+        cumulative_pnl = float(day.get("cumulative_pnl") or (cumulative_pnl + daily_pnl))
+        is_current = (block_num == len(days))
+
+        # ── Block header ──────────────────────────────────────────────
+        A(f"## 📅 Block #{block_num} — {date_str}"
+          + (" ← **CURRENT**" if is_current else ""))
+        A("")
+
+        # Account movement line
+        direction = "📈" if account >= prev_account else "📉"
+        A(f"{direction} **{_usd(prev_account)}** → **{_usd(account)}** "
+          f"&nbsp; {_sign(daily_pnl)}{_usd(daily_pnl)} ({_sign(daily_ret)}{daily_ret*100:.2f}%)"
+          + (f" &nbsp;|&nbsp; SPY: {_sign(bench)}{bench*100:.2f}%"
+             f" &nbsp;|&nbsp; Excess: {_sign(excess_today)}{excess_today*100:.2f}%" if bench else ""))
+        A("")
+        A(f"*Cumulative P&L: **{_sign(cumulative_pnl)}{_usd(cumulative_pnl)}** "
+          f"({_sign(total_return)}{total_return*100:.2f}% total return)*")
+        A("")
+
+        # ── Overnight P&L attribution ─────────────────────────────────
+        if pos_pnl:
+            A("### 📊 Price Movements (overnight P&L attribution)")
+            A("")
+            A("| Ticker | Shares | Open | Close | Change | Day P&L |")
+            A("|--------|--------|------|-------|--------|---------|")
+            sorted_pnl = sorted(pos_pnl.items(), key=lambda x: x[1].get("pnl", 0))
+            for ticker, info in sorted_pnl:
+                p0 = float(info.get("price_start") or 0)
+                p1 = float(info.get("price_end") or 0)
+                chg = (p1 - p0) / p0 if p0 else 0.0
+                pval = float(info.get("pnl") or 0)
+                icon = "📈" if pval > 0 else "📉" if pval < 0 else "→"
+                A(f"| {icon} {ticker} | {info.get('shares',0):,} | "
+                  f"{_usd(p0)} | {_usd(p1)} | "
+                  f"{_sign(chg)}{chg*100:.2f}% | {_sign(pval)}{_usd(pval)} |")
+            A(f"| | | | | **TOTAL** | **{_sign(daily_pnl)}{_usd(daily_pnl)}** |")
+            A("")
+        elif daily_pnl and prev_pos:
+            A(f"### 📊 Price Movements")
+            A("")
+            A(f"> Daily P&L: **{_sign(daily_pnl)}{_usd(daily_pnl)}** "
+              f"(per-position breakdown not available for this date)")
+            A("")
+
+        # ── Orders & cash flow ────────────────────────────────────────
+        sells = [o for o in orders if o.get("action") == "sell"]
+        buys  = [o for o in orders if o.get("action") == "buy"]
+        holds = [t for t in target
+                 if t in prev_pos
+                 and t not in {o["ticker"] for o in orders}]
+
+        if orders:
+            A("### 💸 Orders & Cash Flow")
+            A("")
+            A("| Flow | Ticker | Shares | Price | Trade Value | Cash Balance |")
+            A("|------|--------|--------|-------|-------------|--------------|")
+
+            running_cash = prev_cash
+            A(f"| **Opening Cash** | — | — | — | — | **{_usd(running_cash)}** |")
+
+            # SELLs first (generate cash)
+            for o in sells:
+                t = o["ticker"]
+                sh = abs(int(o.get("shares") or 0))
+                px = float(o.get("price") or prices.get(t, 0))
+                val = sh * px
+                running_cash += val
+                prev_sh = prev_pos.get(t, sh)
+                in_target = t in target
+                icon = "🟡 REDUCE" if in_target else "🔴 SELL ALL"
+                A(f"| {icon} | {t} | −{sh:,} | {_usd(px)} | "
+                  f"+{_usd(val)} | {_usd(running_cash)} |")
+
+            # BUYs (consume cash)
+            for o in buys:
+                t = o["ticker"]
+                sh = abs(int(o.get("shares") or 0))
+                px = float(o.get("price") or prices.get(t, 0))
+                val = sh * px
+                running_cash -= val
+                is_new = t not in prev_pos
+                icon = "🟢 BUY NEW" if is_new else "🔵 ADD"
+                A(f"| {icon} | {t} | +{sh:,} | {_usd(px)} | "
+                  f"−{_usd(val)} | {_usd(running_cash)} |")
+
+            A(f"| **Closing Cash** | — | — | — | — | **{_usd(running_cash)}** |")
+            A("")
+            prev_cash = running_cash
+        else:
+            # No trades
+            A("### 💸 Orders & Cash Flow")
+            A("")
+            A(f"> **No rebalancing orders.** All {len(holds)} positions held unchanged.")
+            A(f"> Cash: {_usd(prev_cash)}")
+            A("")
+
+        if holds:
+            hold_str = "  ".join(f"`{t}`" for t in sorted(holds))
+            A(f"⏸ **Hold** ({len(holds)} positions): {hold_str}")
+            A("")
+
+        # ── End-of-day snapshot ───────────────────────────────────────
+        # Derive invested from target positions × prices
+        invested = sum(target.get(t, 0) * prices.get(t, 0) for t in target)
+        eod_cash = cash_eod if cash_eod is not None else (account - invested)
+
+        A("### 🔒 End of Day")
+        A("")
+        A("| | Value |")
+        A("|---|-------|")
+        A(f"| Portfolio (invested) | {_usd(invested)} |")
+        A(f"| Cash | {_usd(eod_cash)} |")
+        A(f"| **Total Account** | **{_usd(account)}** |")
+        A(f"| Cumulative P&L | {_sign(cumulative_pnl)}{_usd(cumulative_pnl)} |")
+        A(f"| Positions | {len(target)} |")
+        A("")
+
+        # ── Current day: algorithm's top-N picks ──────────────────────
+        if is_current and target:
+            A(f"### ⭐ Algorithm's Top {topk} Picks (Next Session)")
+            A("")
+            A("> These are the algorithm's highest-conviction positions at")
+            A("> current prices. Orders to rebalance toward this portfolio")
+            A("> execute at **next market open**.")
+            A("")
+
+            items = sorted(
+                [(t, int(sh), float(prices.get(t) or 0))
+                 for t, sh in target.items()],
+                key=lambda x: -x[1] * x[2]
+            )[:topk]
+
+            A("| # | Ticker | Shares | Price | Position Value | Weight |")
+            A("|---|--------|--------|-------|----------------|--------|")
+            for i, (t, sh, px) in enumerate(items, 1):
+                val = sh * px
+                wt = val / account * 100 if account else 0.0
+                A(f"| {i} | **{t}** | {sh:,} | {_usd(px)} | {_usd(val)} | {wt:.1f}% |")
+
+            total_top = sum(sh * px for _, sh, px in items)
+            A(f"| | | | **Top-{topk} total** | **{_usd(total_top)}** | "
+              f"**{total_top/account*100 if account else 0:.0f}%** |")
+            A("")
+
+            if len(orders) > 0:
+                A(f"*{len(orders)} orders will execute at next market open to rebalance "
+                  f"toward this portfolio.*")
+                A("")
+
+        A("---")
+        A("")
+
+        # Advance running state for next block
+        prev_account = account
+        prev_target = dict(target)
+
+        # Anchor next block's opening cash to actual account state.
+        # Use current-day prices as a proxy for today's closing prices
+        # to estimate the cash = account - portfolio_value.
+        # This prevents compounding errors (e.g. reset days or data gaps).
+        if cash_eod is not None:
+            # Authoritative cash field present (newer files)
+            prev_cash = float(cash_eod)
+        elif prices:
+            estimated_port = sum(target.get(t, 0) * prices.get(t, 0) for t in target)
+            prev_cash = account - estimated_port
+        # else: keep prev_cash as computed from the order waterfall
+
+    # ── Summary table ─────────────────────────────────────────────────
+    if days:
+        first_acct = float(days[0].get("account_value") or initial_capital)
+        last_acct  = float(days[-1].get("account_value") or initial_capital)
+        total_days = len(days)
+        total_ret = (last_acct - initial_capital) / initial_capital if initial_capital else 0.0
+
+        A("## 📈 Summary")
+        A("")
+        A("| Metric | Value |")
+        A("|--------|-------|")
+        A(f"| Trading Days | {total_days} |")
+        A(f"| Initial Capital | {_usd(initial_capital)} |")
+        A(f"| Current Account | {_usd(last_acct)} |")
+        A(f"| Total Return | {_sign(total_ret)}{total_ret*100:.2f}% |")
+        A(f"| Cumulative P&L | {_sign(cumulative_pnl)}{_usd(cumulative_pnl)} |")
+        A("")
+
+    A(f"*Generated by QuantaAlpha · {ts.strftime('%Y-%m-%d %H:%M')} UTC*")
+    A("")
+
+    return "\n".join(lines)
+
+
+# ── Save helpers ──────────────────────────────────────────────────────
+
+def save_chain_report(
+    orders_dir: str | Path,
+    *,
+    output_dir: Optional[str | Path] = None,
+    initial_capital: float = 1_000_000.0,
+    topk: int = 10,
+    generated_at: Optional[datetime] = None,
+) -> Path:
+    """Load all order files, build chain report, save to disk.
+
+    Parameters
+    ----------
+    orders_dir:
+        Directory containing ``pending_orders_*.json`` and ``archive/``.
+    output_dir:
+        Where to write the report (default: ``{orders_dir}/reports``).
+    initial_capital, topk:
+        Passed to :func:`generate_chain_report`.
+
+    Returns
+    -------
+    Path
+        Path to the written ``trading_journal.md`` file.
+    """
+    days = load_all_orders(orders_dir)
+    md = generate_chain_report(days, initial_capital=initial_capital,
+                               topk=topk, generated_at=generated_at)
+    out = Path(output_dir or Path(orders_dir) / "reports")
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / "trading_journal.md"
+    path.write_text(md, encoding="utf-8")
+    return path
+
+
+# ── Backward-compat wrappers (kept for any existing callers) ──────────
 
 def generate_report(
     data: Dict[str, Any],
@@ -65,303 +413,8 @@ def generate_report(
     ledger: Optional[List[Dict]] = None,
     generated_at: Optional[datetime] = None,
 ) -> str:
-    """Generate a Markdown trading report.
-
-    Parameters
-    ----------
-    data:
-        Order data dict from ``TradingScheduler.run_signal()`` or loaded
-        from ``pending_orders_{date}.json``.
-    ledger:
-        Trailing daily performance rows (from ``PositionTracker.load_ledger()``).
-    generated_at:
-        Timestamp to embed in the footer (default: now UTC).
-
-    Returns
-    -------
-    str
-        Full Markdown text (UTF-8, LF line endings).
-    """
-    ledger = ledger or []
-    ts = generated_at or datetime.now(timezone.utc)
-
-    # ── Extract fields ───────────────────────────────────────────────
-    date_str = data.get("date", "unknown")
-    account = float(data.get("account_value") or 0)
-    initial_cap = float(data.get("initial_capital") or 0)
-    daily_pnl = float(data.get("daily_pnl") or 0)
-    cash = float(data.get("cash") or 0)
-    cum_pnl = float(data.get("cumulative_pnl") or 0)
-    cum_excess = float(data.get("cumulative_excess_return") or 0)
-    bench = float(data.get("benchmark_return") or 0)
-    prev_pos: Dict[str, int] = data.get("previous_positions") or {}
-    target: Dict[str, int] = data.get("target_positions") or {}
-    prices: Dict[str, float] = dict(data.get("prices") or {})
-    orders: List[Dict] = data.get("orders") or []
-    pos_pnl: Dict[str, Dict] = data.get("position_pnl") or {}
-    scores_count: int = int(data.get("scores_count") or 0)
-    orders_file: str = data.get("orders_file", "")
-    kill_switch: bool = bool(data.get("kill_switch"))
-
-    # Fallback: extract prices from order dicts when prices dict absent
-    for o in orders:
-        t = o.get("ticker", "")
-        px = float(o.get("price") or 0)
-        if t and px and t not in prices:
-            prices[t] = px
-
-    # Derived
-    daily_ret = daily_pnl / (account - daily_pnl) if account and account != daily_pnl else 0.0
-    total_return = (account - initial_cap) / initial_cap if initial_cap else 0.0
-    invested = sum(target.get(t, 0) * prices.get(t, 0) for t in target)
-    if not cash and account and invested:
-        cash = account - invested
-    invest_pct = invested / account * 100 if account else 0.0
-    excess_today = daily_ret - bench
-
-    # ── Categorise orders ────────────────────────────────────────────
-    sells: List[Dict] = []
-    reduces: List[Dict] = []
-    new_buys: List[Dict] = []
-    increases: List[Dict] = []
-    holds: List[str] = []
-
-    sell_tickers = {o["ticker"] for o in orders if o.get("action") == "sell"}
-    buy_tickers = {o["ticker"] for o in orders if o.get("action") == "buy"}
-
-    for o in orders:
-        t = o["ticker"]
-        if o.get("action") == "sell":
-            if t not in target:
-                sells.append(o)
-            else:
-                reduces.append(o)
-        elif o.get("action") == "buy":
-            if t in prev_pos:
-                increases.append(o)
-            else:
-                new_buys.append(o)
-
-    for t in target:
-        if t in prev_pos and t not in sell_tickers and t not in buy_tickers:
-            holds.append(t)
-
-    total_orders = len(sells) + len(reduces) + len(new_buys) + len(increases)
-    action_summary_parts = []
-    if sells:
-        action_summary_parts.append(f"**{len(sells)} SELL**")
-    if reduces:
-        action_summary_parts.append(f"**{len(reduces)} REDUCE**")
-    if new_buys:
-        action_summary_parts.append(f"**{len(new_buys)} BUY NEW**")
-    if increases:
-        action_summary_parts.append(f"**{len(increases)} INCREASE**")
-    if holds:
-        action_summary_parts.append(f"{len(holds)} HOLD")
-    if not action_summary_parts:
-        action_summary_parts = ["**NO TRADES**"]
-    action_summary = "  |  ".join(action_summary_parts)
-
-    lines: List[str] = []
-    A = lines.append  # shorthand
-
-    # ── Title ────────────────────────────────────────────────────────
-    A(f"# QuantaAlpha Daily Trading Report — {date_str}")
-    A("")
-
-    if kill_switch:
-        A("> ⛔ **KILL-SWITCH TRIGGERED** — daily loss exceeded limit. No orders generated.")
-        A("")
-
-    # ── Executive Summary ────────────────────────────────────────────
-    A("## Executive Summary")
-    A("")
-
-    cum_trend = _trend(ledger, "cumulative_pnl") if len(ledger) >= 2 else "→"
-
-    rows_summary = [
-        ("Account Value", f"**{_fmt_usd(account)}**"),
-        ("Total Return", f"{_pnl_badge(total_return, 'pct')} since inception ({_fmt_usd(cum_pnl, True)} cumulative P&L) {cum_trend}"),
-        ("Today P&L", f"{_pnl_badge(daily_pnl)} ({_pnl_badge(daily_ret, 'pct')})"),
-        ("Today vs Benchmark", f"Portfolio {_pnl_badge(daily_ret, 'pct')}  |  SPY {_fmt_pct(bench, True)}  |  Excess {_pnl_badge(excess_today, 'pct')}"),
-        ("Today's Action", action_summary),
-        ("Portfolio", f"{len(target)} positions  |  {invest_pct:.0f}% invested  |  Cash {_fmt_usd(cash)}"),
-        ("Tickers Scored", f"{scores_count:,}"),
-    ]
-
-    A("| Metric | Value |")
-    A("|--------|-------|")
-    for label, val in rows_summary:
-        A(f"| {label} | {val} |")
-    A("")
-
-    # ── Trading Actions ──────────────────────────────────────────────
-    if total_orders == 0 and not kill_switch:
-        A("## 📋 No Trades — Portfolio Unchanged")
-        A("")
-        A("All positions held. No orders to execute.")
-        A("")
-    else:
-        A("## 📋 Trading Actions")
-        A("")
-        A("> Execute these orders at market open on the **next trading day**.")
-        A("")
-
-        # SELL
-        if sells:
-            A("### 🔴 SELL — Close Positions")
-            A("")
-            A("| Ticker | Shares | Est. Price | Est. Value | Reason |")
-            A("|--------|--------|-----------|-----------|--------|")
-            for o in sells:
-                sh = abs(int(o.get("shares", 0)))
-                px = float(o.get("price") or 0)
-                val = sh * px
-                reason = o.get("reason", "")
-                prev_sh = prev_pos.get(o["ticker"], sh)
-                A(f"| {o['ticker']} | −{prev_sh:,} | {_fmt_usd(px)} | {_fmt_usd(val)} | {reason} |")
-            A("")
-
-        # REDUCE
-        if reduces:
-            A("### 🟡 REDUCE — Trim Positions")
-            A("")
-            A("| Ticker | From | To | Change | Est. Price | Est. Value | Reason |")
-            A("|--------|------|-----|--------|-----------|-----------|--------|")
-            for o in reduces:
-                sh = abs(int(o.get("shares", 0)))
-                px = float(o.get("price") or 0)
-                val = sh * px
-                tgt = int(target.get(o["ticker"], 0))
-                prev_sh = prev_pos.get(o["ticker"], tgt + sh)
-                reason = o.get("reason", "")
-                A(f"| {o['ticker']} | {prev_sh:,} | {tgt:,} | −{sh:,} | {_fmt_usd(px)} | {_fmt_usd(val)} | {reason} |")
-            A("")
-
-        # BUY NEW
-        if new_buys:
-            A("### 🟢 BUY NEW — Open Positions")
-            A("")
-            A("| Ticker | Shares | Est. Price | Est. Value | Reason |")
-            A("|--------|--------|-----------|-----------|--------|")
-            for o in new_buys:
-                sh = abs(int(o.get("shares", 0)))
-                px = float(o.get("price") or 0)
-                val = sh * px
-                reason = o.get("reason", "")
-                A(f"| {o['ticker']} | +{sh:,} | {_fmt_usd(px)} | {_fmt_usd(val)} | {reason} |")
-            A("")
-
-        # INCREASE
-        if increases:
-            A("### 🔵 INCREASE — Add to Positions")
-            A("")
-            A("| Ticker | From | To | Add | Est. Price | Est. Cost | Reason |")
-            A("|--------|------|-----|-----|-----------|----------|--------|")
-            for o in increases:
-                sh = abs(int(o.get("shares", 0)))
-                px = float(o.get("price") or 0)
-                val = sh * px
-                tgt = int(target.get(o["ticker"], 0))
-                prev_sh = prev_pos.get(o["ticker"], tgt - sh)
-                reason = o.get("reason", "")
-                A(f"| {o['ticker']} | {prev_sh:,} | {tgt:,} | +{sh:,} | {_fmt_usd(px)} | {_fmt_usd(val)} | {reason} |")
-            A("")
-
-    # HOLD
-    if holds:
-        A("### ⏸ Hold — No Action Required")
-        A("")
-        hold_str = "  ".join(f"`{t}`" for t in sorted(holds))
-        A(hold_str)
-        A("")
-
-    # ── Position P&L ─────────────────────────────────────────────────
-    if pos_pnl:
-        A("## 📈 Today's Position P&L")
-        A("")
-        A("| Ticker | Shares | Open | Close | Day P&L |")
-        A("|--------|--------|------|-------|---------|")
-        sorted_pnl = sorted(pos_pnl.items(), key=lambda x: x[1].get("pnl", 0))
-        for ticker, info in sorted_pnl:
-            pnl_val = float(info.get("pnl", 0))
-            A(f"| {ticker} | {info.get('shares', 0):,} | "
-              f"{_fmt_usd(float(info.get('price_start', 0)))} | "
-              f"{_fmt_usd(float(info.get('price_end', 0)))} | "
-              f"{_pnl_badge(pnl_val)} |")
-        A(f"| **TOTAL** | | | | **{_pnl_badge(daily_pnl)}** |")
-        A("")
-
-    # ── Target Portfolio ─────────────────────────────────────────────
-    A("## 📍 Target Portfolio (after all orders executed)")
-    A("")
-    A("| # | Ticker | Shares | Price | Value | Weight |")
-    A("|---|--------|--------|-------|-------|--------|")
-
-    items = []
-    for t, sh in target.items():
-        px = float(prices.get(t) or 0)
-        val = sh * px
-        items.append((t, int(sh), px, val))
-    items.sort(key=lambda x: -x[3])
-
-    total_invested = 0.0
-    for i, (t, sh, px, val) in enumerate(items, 1):
-        total_invested += val
-        wt = val / account * 100 if account else 0.0
-        A(f"| {i} | {t} | {sh:,} | {_fmt_usd(px)} | {_fmt_usd(val)} | {wt:.1f}% |")
-
-    total_wt = total_invested / account * 100 if account else 0.0
-    A(f"| | **TOTAL** | | | **{_fmt_usd(total_invested)}** | **{total_wt:.0f}%** |")
-    if cash:
-        A(f"| | CASH | | | {_fmt_usd(cash)} | {cash / account * 100 if account else 0:.0f}% |")
-    A("")
-
-    # ── Account Summary ──────────────────────────────────────────────
-    A("## 💰 Account Summary")
-    A("")
-    A("| Metric | Value |")
-    A("|--------|-------|")
-    A(f"| Initial Capital | {_fmt_usd(initial_cap)} |")
-    A(f"| Account Value | {_fmt_usd(account)} |")
-    A(f"| Total Return | {_pnl_badge(total_return, 'pct')} |")
-    A(f"| Daily P&L | {_pnl_badge(daily_pnl)} ({_pnl_badge(daily_ret, 'pct')}) |")
-    A(f"| Cumulative P&L | {_pnl_badge(cum_pnl)} |")
-    A(f"| Cumul Excess vs SPY | {_pnl_badge(cum_excess, 'pct')} |")
-    A(f"| Invested | {_fmt_usd(invested)} ({invest_pct:.0f}%) |")
-    A(f"| Cash | {_fmt_usd(cash)} |")
-    A(f"| Positions | {len(target)} |")
-    A(f"| Tickers Scored | {scores_count:,} |")
-    A("")
-
-    # ── Performance History ──────────────────────────────────────────
-    if ledger:
-        A("## 📅 Performance History")
-        A("")
-        A("| Date | Account | Daily P&L | Cumul P&L | Daily Ret | Excess | Positions |")
-        A("|------|---------|-----------|-----------|-----------|--------|-----------|")
-        for row in ledger:
-            d = row.get("date", "?")
-            acct = float(row.get("account_value") or 0)
-            d_pnl = float(row.get("daily_pnl") or 0)
-            c_pnl = float(row.get("cumulative_pnl") or 0)
-            d_ret = float(row.get("daily_return") or 0)
-            excess = float(row.get("cum_excess_return") or 0)
-            npos = int(float(row.get("num_positions") or 0))
-            A(f"| {d} | {_fmt_usd(acct)} | {_pnl_badge(d_pnl)} "
-              f"| {_pnl_badge(c_pnl)} | {_pnl_badge(d_ret, 'pct')} "
-              f"| {_pnl_badge(excess, 'pct')} | {npos} |")
-        A("")
-
-    # ── Footer ───────────────────────────────────────────────────────
-    A("---")
-    A("")
-    A(f"*Generated by QuantaAlpha at {ts.strftime('%Y-%m-%d %H:%M')} UTC*  ")
-    if orders_file:
-        A(f"*Orders file: `{orders_file}`*  ")
-    A("")
-
-    return "\n".join(lines)
+    """Single-day report (backward compat). Wraps generate_chain_report."""
+    return generate_chain_report([data], generated_at=generated_at)
 
 
 def save_report(
@@ -371,79 +424,67 @@ def save_report(
     output_dir: Optional[Path | str] = None,
     generated_at: Optional[datetime] = None,
 ) -> Path:
-    """Generate and save the Markdown report.
-
-    Parameters
-    ----------
-    data:
-        Order data dict (from scheduler or JSON file).
-    ledger:
-        Trailing daily rows.
-    output_dir:
-        Directory to write to (default: ``data/live/reports``).
-    generated_at:
-        Timestamp for footer.
-
-    Returns
-    -------
-    Path
-        Path to the written ``.md`` file.
-    """
-    date_str = data.get("date", "unknown")
+    """Single-day save (backward compat). Uses trading_journal.md."""
+    md = generate_chain_report([data], generated_at=generated_at)
     out = Path(output_dir or "data/live/reports")
     out.mkdir(parents=True, exist_ok=True)
-    path = out / f"report_{date_str}.md"
-
-    md = generate_report(data, ledger=ledger, generated_at=generated_at)
+    path = out / "trading_journal.md"
     path.write_text(md, encoding="utf-8")
     return path
 
 
-# ── CLI entry point ──────────────────────────────────────────────────
+# ── CLI entry point ───────────────────────────────────────────────────
 
 def main() -> None:
-    """Read order JSON from stdin or file arg and print the Markdown report.
+    """Generate trading journal from all order files in a directory.
 
     Usage::
 
+        # Full journal from data/live (default)
+        python -m quantaalpha.live.report_md
+
+        # Custom directory + topk
+        python -m quantaalpha.live.report_md --orders-dir data/live --topk 10
+
+        # Single file (legacy)
         python -m quantaalpha.live.report_md pending_orders_2026-02-24.json
-        cat pending_orders.json | python -m quantaalpha.live.report_md
     """
-    import json
     import sys
 
-    if len(sys.argv) > 1:
-        path = Path(sys.argv[1])
-        data = json.loads(path.read_text())
-        orders_dir = path.parent
+    args = sys.argv[1:]
+    orders_dir = "data/live"
+    topk = 10
+    initial_capital = 1_000_000.0
+    single_file: Optional[str] = None
+
+    i = 0
+    while i < len(args):
+        if args[i] == "--orders-dir" and i + 1 < len(args):
+            orders_dir = args[i + 1]; i += 2
+        elif args[i] == "--topk" and i + 1 < len(args):
+            topk = int(args[i + 1]); i += 2
+        elif args[i] == "--initial-capital" and i + 1 < len(args):
+            initial_capital = float(args[i + 1]); i += 2
+        elif not args[i].startswith("--"):
+            single_file = args[i]; i += 1
+        else:
+            i += 1
+
+    if single_file:
+        path = Path(single_file)
+        days = [json.loads(path.read_text())]
+        orders_dir_path = path.parent
     else:
-        data = json.load(sys.stdin)
-        orders_dir = Path("data/live")
+        days = load_all_orders(orders_dir)
+        orders_dir_path = Path(orders_dir)
 
-    # Load ledger from same directory
-    ledger_rows: List[Dict] = []
-    ledger_path = orders_dir / "ledger.csv"
-    if ledger_path.exists():
-        import csv
-        with open(ledger_path, newline="") as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
-        for r in rows:
-            for col in r:
-                if col != "date":
-                    try:
-                        r[col] = float(r[col]) if r.get(col) else 0.0
-                    except (ValueError, TypeError):
-                        r[col] = 0.0
-        ledger_rows = rows[-10:]
+    md = generate_chain_report(days, initial_capital=initial_capital, topk=topk)
 
-    md = generate_report(data, ledger=ledger_rows)
-
-    # Save alongside the order file and also print to stdout
-    if len(sys.argv) > 1:
-        rpt_path = save_report(data, ledger=ledger_rows, output_dir=orders_dir.parent / "reports")
-        print(f"Report saved: {rpt_path}", file=sys.stderr)
-
+    rpt_dir = orders_dir_path / "reports"
+    rpt_dir.mkdir(parents=True, exist_ok=True)
+    rpt_path = rpt_dir / "trading_journal.md"
+    rpt_path.write_text(md, encoding="utf-8")
+    print(f"Report saved: {rpt_path}", file=sys.stderr)
     print(md)
 
 

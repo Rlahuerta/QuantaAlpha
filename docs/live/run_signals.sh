@@ -3,10 +3,11 @@
 # QuantaAlpha — Daily Live Signal Generation
 # ======================================================================
 # Usage:
-#   bash docs/live/run_signals.sh              # full pipeline (ingest + signals)
-#   bash docs/live/run_signals.sh --signals    # signals only (skip data update)
-#   bash docs/live/run_signals.sh --ingest     # data update only (skip signals)
-#   bash docs/live/run_signals.sh --report     # regenerate today's report only
+#   bash docs/live/run_signals.sh                  # full pipeline (ingest + signals)
+#   bash docs/live/run_signals.sh --signals        # signals only (skip data update)
+#   bash docs/live/run_signals.sh --ingest         # data update only (skip signals)
+#   bash docs/live/run_signals.sh --report         # regenerate journal from all history
+#   bash docs/live/run_signals.sh --topk 10        # override number of top picks shown
 #
 # This script:
 #   1. Activates the quantaalpha-ollama conda environment
@@ -35,16 +36,19 @@ ORDERS_DIR="${REPO_ROOT}/data/live"
 DO_INGEST=true
 DO_SIGNALS=true
 DO_REPORT_ONLY=false
+TOPK=10
 for arg in "$@"; do
     case "$arg" in
         --signals)  DO_INGEST=false ;;
         --ingest)   DO_SIGNALS=false ;;
         --report)   DO_INGEST=false; DO_SIGNALS=false; DO_REPORT_ONLY=true ;;
+        --topk)     shift; TOPK="$1" ;;   # consumed next arg below
+        --topk=*)   TOPK="${arg#--topk=}" ;;
         --help|-h)
-            head -18 "$0" | grep "^#" | sed 's/^# \?//'
+            head -20 "$0" | grep "^#" | sed 's/^# \?//'
             exit 0 ;;
         *)
-            echo "Unknown flag: $arg (use --ingest, --signals, --report, or no flag for full pipeline)"
+            echo "Unknown flag: $arg (use --ingest, --signals, --report, --topk N, or no flag for full pipeline)"
             exit 1 ;;
     esac
 done
@@ -74,7 +78,7 @@ echo "========================================"
 echo "Repo:      $REPO_ROOT"
 echo "Config:    $CONFIG"
 echo "Conda env: $CONDA_ENV"
-echo "Ingest:    $DO_INGEST  |  Signals: $DO_SIGNALS"
+echo "Ingest:    $DO_INGEST  |  Signals: $DO_SIGNALS  |  Top-K: $TOPK"
 echo ""
 
 if [[ -f "$POSITIONS_FILE" ]]; then
@@ -166,29 +170,15 @@ if result.get('kill_switch'):
     print('  No orders generated. Review risk limits.')
     sys.exit(2)
 
-# scheduler.run_signal() already saved the Markdown report.
-# Print it to stdout so the terminal shows the full report.
-report_file = result.get('report_file')
-if report_file:
-    from pathlib import Path
-    md_path = Path(report_file)
-    if md_path.exists():
-        print(md_path.read_text())
-        print(f'  (Report saved: {report_file})', file=sys.stderr)
-    else:
-        # Fallback: generate inline if file not written
-        from quantaalpha.live.position_tracker import PositionTracker
-        import yaml as _y
-        with open('$CONFIG') as _f:
-            _cfg = _y.safe_load(_f)
-        _out = _cfg.get('output', {})
-        tracker = PositionTracker(
-            positions_file=_out.get('positions_file', 'data/live/positions.json'),
-            pnl_dir=_out.get('pnl_dir', 'data/live/pnl'),
-        )
-        ledger = tracker.load_ledger(last_n=10)
-        from quantaalpha.live.report_md import generate_report
-        print(generate_report(result, ledger=ledger))
+# Generate the chain-of-blocks trading journal for all history
+from quantaalpha.live.report_md import save_chain_report
+import yaml as _y
+with open('$CONFIG') as _f:
+    _cfg = _y.safe_load(_f)
+init_cap = float(_cfg.get('capital', 1_000_000))
+journal_path = save_chain_report('$ORDERS_DIR', topk=$TOPK, initial_capital=init_cap)
+print(journal_path.read_text())
+print(f'  (Journal saved: {journal_path})', file=sys.stderr)
 "
     echo ""
 fi
@@ -197,36 +187,18 @@ fi
 # STEP 3 (optional): Regenerate report from existing orders file
 # ══════════════════════════════════════════════════════════════════════
 if [[ "$DO_REPORT_ONLY" == "true" ]]; then
-    echo "── Regenerating report from existing orders ──"
+    echo "── Regenerating trading journal from all order history ──"
     run_conda python -c "
-import json, sys, glob
-from pathlib import Path
-
-# Find the most recent orders file
-files = sorted(glob.glob('$ORDERS_DIR/pending_orders_*.json'))
-if not files:
-    print('ERROR: No pending_orders_*.json found in $ORDERS_DIR', file=sys.stderr)
-    sys.exit(1)
-orders_path = Path(files[-1])
-print(f'  Using: {orders_path}', file=sys.stderr)
-data = json.loads(orders_path.read_text())
-
-# Load ledger
 import yaml
-from quantaalpha.live.position_tracker import PositionTracker
+from pathlib import Path
+from quantaalpha.live.report_md import save_chain_report
+
 with open('$CONFIG') as _f:
     _cfg = yaml.safe_load(_f)
-_out = _cfg.get('output', {})
-tracker = PositionTracker(
-    positions_file=_out.get('positions_file', 'data/live/positions.json'),
-    pnl_dir=_out.get('pnl_dir', 'data/live/pnl'),
-)
-ledger = tracker.load_ledger(last_n=10)
-
-from quantaalpha.live.report_md import generate_report, save_report
-report_path = save_report(data, ledger=ledger, output_dir=Path('$ORDERS_DIR/reports'))
-print(report_path.read_text())
-print(f'  (Report saved: {report_path})', file=sys.stderr)
+init_cap = float(_cfg.get('capital', 1_000_000))
+journal_path = save_chain_report('$ORDERS_DIR', topk=$TOPK, initial_capital=init_cap)
+print(journal_path.read_text())
+print(f'  (Journal saved: {journal_path})', file=sys.stderr)
 "
     echo ""
 fi

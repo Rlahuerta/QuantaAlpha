@@ -1,34 +1,78 @@
-"""Unit tests for quantaalpha.live.report_md — Markdown report generator.
+"""Unit tests for quantaalpha.live.report_md — chain-of-blocks format.
 
 Tests cover:
-- Normal trading day with SELL + BUY orders
+- Single-day chain (initial capital block + day block)
+- Multi-day chain with cash flow arithmetic
+- SELL → BUY cash flow waterfall correctness
 - Hold-only day (no orders)
-- Kill-switch day
-- Missing / empty data fields (backward compat)
-- Performance history section with ledger rows
-- Report file persistence (save_report)
+- Current-day top-N picks section
+- Missing prices / partial data graceful degradation
+- load_all_orders deduplication (live wins over archive)
+- save_chain_report writes trading_journal.md
+- backward-compat wrappers: generate_report, save_report
 """
 
 from __future__ import annotations
 
+import json
+import math
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Fixtures — minimal order_data dicts
-# ---------------------------------------------------------------------------
+from quantaalpha.live.report_md import (
+    generate_chain_report,
+    generate_report,
+    load_all_orders,
+    save_chain_report,
+    save_report,
+)
 
-BASE_DATA: dict = {
+# ─── Minimal day fixtures ──────────────────────────────────────────────────────
+
+DAY1: dict = {
+    "date": "2026-02-20",
+    "account_value": 990_000.0,
+    "daily_pnl": 0.0,
+    "initial_capital": 1_000_000.0,
+    "orders": [
+        {"ticker": "AAPL", "shares": 500, "action": "buy", "price": 200.0, "reason": "new"},
+        {"ticker": "MSFT", "shares": 200, "action": "buy", "price": 500.0, "reason": "new"},
+    ],
+    "target_positions": {"AAPL": 500, "MSFT": 200},
+    "previous_positions": {},
+    "prices": {},           # no prices at the top level — must use order prices
+    "position_pnl": {},
+}
+
+DAY2: dict = {
+    "date": "2026-02-21",
+    "account_value": 1_002_000.0,
+    "daily_pnl": 12_000.0,
+    "initial_capital": 1_000_000.0,
+    "benchmark_return": 0.005,
+    "orders": [
+        {"ticker": "AAPL", "shares": -500, "action": "sell", "price": 220.0, "reason": "exit"},
+        {"ticker": "GOOG", "shares": 100, "action": "buy",  "price": 300.0, "reason": "new"},
+    ],
+    "target_positions": {"MSFT": 200, "GOOG": 100},
+    "previous_positions": {"AAPL": 500, "MSFT": 200},
+    "prices": {"AAPL": 220.0, "MSFT": 510.0, "GOOG": 300.0},
+    "position_pnl": {
+        "AAPL": {"shares": 500, "price_start": 200.0, "price_end": 220.0, "pnl": 10_000.0},
+        "MSFT": {"shares": 200, "price_start": 500.0, "price_end": 510.0, "pnl":  2_000.0},
+    },
+}
+
+FULL_DATA: dict = {
     "date": "2026-02-24",
     "initial_capital": 1_000_000.0,
-    "scores_count": 508,
     "daily_pnl": -381.99,
     "account_value": 989_645.73,
     "cash": -9_922.81,
     "benchmark_return": 0.0012,
     "cumulative_pnl": -8_183.47,
-    "cumulative_excess_return": -0.008973,
     "previous_positions": {
         "GEN": 4591, "FIS": 2114, "GDDY": 1147, "FOX": 1958,
         "IFF": 1207, "BRO": 1434, "ERIE": 385, "AIZ": 456,
@@ -53,208 +97,304 @@ BASE_DATA: dict = {
         "FIS":  {"shares": 2114, "price_start": 47.46, "price_end": 47.29, "pnl": -359.38},
         "GDDY": {"shares": 1147, "price_start": 87.76, "price_end": 87.18, "pnl": -665.26},
     },
-    "orders_file": "data/live/pending_orders_2026-02-24.json",
 }
 
-LEDGER_ROWS: list = [
-    {"date": "2026-02-21", "account_value": 1_000_000.0, "daily_pnl": 0.0,
-     "cumulative_pnl": 0.0, "daily_return": 0.0, "cum_excess_return": 0.0,
-     "num_positions": 0, "invested": 0, "cash": 0, "benchmark_return": 0},
-    {"date": "2026-02-22", "account_value": 1_007_987.19, "daily_pnl": 7987.19,
-     "cumulative_pnl": 7987.19, "daily_return": 0.007987, "cum_excess_return": 0.007987,
-     "num_positions": 30, "invested": 0, "cash": 0, "benchmark_return": 0},
-    {"date": "2026-02-23", "account_value": 992_198.52, "daily_pnl": -15788.67,
-     "cumulative_pnl": -7801.48, "daily_return": -0.016574, "cum_excess_return": -0.008587,
-     "num_positions": 30, "invested": 0, "cash": 0, "benchmark_return": 0},
-    {"date": "2026-02-24", "account_value": 989_645.73, "daily_pnl": -381.99,
-     "cumulative_pnl": -8183.47, "daily_return": -0.000386, "cum_excess_return": -0.008973,
-     "num_positions": 10, "invested": 999_568.54, "cash": -9922.81, "benchmark_return": 0.0012},
-]
+# ─── generate_chain_report ─────────────────────────────────────────────────────
+
+def test_chain_report_has_initial_block():
+    md = generate_chain_report([DAY1], initial_capital=1_000_000.0, topk=5)
+    assert "Block #0" in md
+    assert "Initial State" in md
+    assert "$1,000,000.00" in md
 
 
-# ---------------------------------------------------------------------------
-# Import under test
-# ---------------------------------------------------------------------------
-
-from quantaalpha.live.report_md import generate_report, save_report  # noqa: E402
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-class TestGenerateReport:
-    def test_returns_string(self):
-        md = generate_report(BASE_DATA)
-        assert isinstance(md, str)
-        assert len(md) > 100
-
-    def test_title_contains_date(self):
-        md = generate_report(BASE_DATA)
-        assert "2026-02-24" in md
-
-    def test_executive_summary_section(self):
-        md = generate_report(BASE_DATA)
-        assert "Executive Summary" in md
-        assert "989" in md          # account value
-        assert "1,000,000" in md    # initial capital or nearby
-
-    def test_sell_section_present(self):
-        md = generate_report(BASE_DATA)
-        assert "SELL" in md
-        assert "AIZ" in md
-
-    def test_buy_section_present(self):
-        md = generate_report(BASE_DATA)
-        assert "BUY" in md
-        assert "GPN" in md
-
-    def test_hold_section_lists_unchanged_tickers(self):
-        md = generate_report(BASE_DATA)
-        assert "Hold" in md
-        # Tickers in both prev_pos and target with no order
-        assert "ERIE" in md
-        assert "BRO" in md
-
-    def test_position_pnl_section(self):
-        md = generate_report(BASE_DATA)
-        assert "Position P&L" in md
-        assert "GEN" in md
-        assert "+$596.83" in md or "596" in md
-
-    def test_target_portfolio_table(self):
-        md = generate_report(BASE_DATA)
-        assert "Target Portfolio" in md
-        assert "TOTAL" in md
-
-    def test_account_summary_section(self):
-        md = generate_report(BASE_DATA)
-        assert "Account Summary" in md
-        assert "Initial Capital" in md
-        assert "Total Return" in md
-
-    def test_footer_contains_generated_at(self):
-        from datetime import datetime, timezone
-        ts = datetime(2026, 2, 24, 21, 34, tzinfo=timezone.utc)
-        md = generate_report(BASE_DATA, generated_at=ts)
-        assert "2026-02-24 21:34" in md
-
-    def test_performance_history_with_ledger(self):
-        md = generate_report(BASE_DATA, ledger=LEDGER_ROWS)
-        assert "Performance History" in md
-        assert "2026-02-22" in md
-        assert "2026-02-23" in md
+def test_chain_report_block_numbering():
+    md = generate_chain_report([DAY1, DAY2], initial_capital=1_000_000.0, topk=5)
+    assert "Block #1" in md
+    assert "Block #2" in md
 
 
-class TestHoldOnlyDay:
-    def test_no_trades_section(self):
-        data = {**BASE_DATA, "orders": [], "previous_positions": BASE_DATA["target_positions"]}
-        md = generate_report(data)
-        assert "No Trades" in md or "no trades" in md.lower()
-
-    def test_hold_tickers_listed(self):
-        data = {**BASE_DATA, "orders": [], "previous_positions": BASE_DATA["target_positions"]}
-        md = generate_report(data)
-        assert "ERIE" in md
+def test_chain_report_dates_appear():
+    md = generate_chain_report([DAY1, DAY2], initial_capital=1_000_000.0)
+    assert "2026-02-20" in md
+    assert "2026-02-21" in md
 
 
-class TestKillSwitchDay:
-    def test_kill_switch_banner(self):
-        data = {**BASE_DATA, "kill_switch": True, "orders": []}
-        md = generate_report(data)
-        assert "KILL-SWITCH" in md
-
-    def test_no_orders_on_kill_switch(self):
-        data = {**BASE_DATA, "kill_switch": True, "orders": []}
-        md = generate_report(data)
-        # Should not have SELL/BUY order tables
-        assert "| AIZ" not in md
+def test_chain_report_current_label_on_last_block():
+    md = generate_chain_report([DAY1, DAY2], initial_capital=1_000_000.0)
+    # Only the last block gets the CURRENT marker
+    assert "CURRENT" in md
+    # The CURRENT marker must appear alongside DAY2's date
+    current_line = [l for l in md.splitlines() if "CURRENT" in l][0]
+    assert "2026-02-21" in current_line
 
 
-class TestMissingFields:
-    def test_empty_data_does_not_crash(self):
-        md = generate_report({})
-        assert isinstance(md, str)
-
-    def test_missing_prices_falls_back_to_order_prices(self):
-        data = {**BASE_DATA, "prices": {}}
-        # Should not raise; prices come from order dicts
-        md = generate_report(data)
-        assert "AIZ" in md
-
-    def test_no_ledger_omits_history_section(self):
-        md = generate_report(BASE_DATA, ledger=[])
-        assert "Performance History" not in md
-
-    def test_single_ledger_row_no_trend(self):
-        # With only 1 row, _trend returns "→" without crashing
-        md = generate_report(BASE_DATA, ledger=[LEDGER_ROWS[0]])
-        assert isinstance(md, str)
-
-    def test_zero_initial_capital(self):
-        data = {**BASE_DATA, "initial_capital": 0}
-        md = generate_report(data)
-        # Should not divide by zero
-        assert isinstance(md, str)
+def test_chain_report_no_current_on_earlier_blocks():
+    """Block #1 must NOT be tagged CURRENT when there are multiple blocks."""
+    md = generate_chain_report([DAY1, DAY2], initial_capital=1_000_000.0)
+    lines = md.splitlines()
+    block1_line = [l for l in lines if "Block #1" in l][0]
+    assert "CURRENT" not in block1_line
 
 
-class TestSaveReport:
-    def test_saves_to_correct_path(self, tmp_path):
-        path = save_report(BASE_DATA, output_dir=tmp_path)
-        assert path.exists()
-        assert path.name == "report_2026-02-24.md"
+# ─── Cash flow arithmetic ──────────────────────────────────────────────────────
 
-    def test_file_content_is_markdown(self, tmp_path):
-        path = save_report(BASE_DATA, ledger=LEDGER_ROWS, output_dir=tmp_path)
-        content = path.read_text(encoding="utf-8")
-        assert content.startswith("# QuantaAlpha")
-        assert "## Executive Summary" in content
-
-    def test_idempotent_overwrite(self, tmp_path):
-        save_report(BASE_DATA, output_dir=tmp_path)
-        path = save_report(BASE_DATA, output_dir=tmp_path)
-        assert path.exists()
-        # File should contain exactly one title line
-        lines = path.read_text().splitlines()
-        title_lines = [l for l in lines if l.startswith("# QuantaAlpha Daily")]
-        assert len(title_lines) == 1
-
-    def test_creates_output_dir(self, tmp_path):
-        nested = tmp_path / "deep" / "nested" / "reports"
-        path = save_report(BASE_DATA, output_dir=nested)
-        assert path.exists()
+def test_cash_flow_sell_increases_cash():
+    """Selling 500 AAPL @ 220 should add $110,000 to opening cash."""
+    initial = 1_000_000.0
+    # After DAY1 buys: 500×200 + 200×500 = 200,000; opening cash = 800,000
+    # DAY2: SELL 500 AAPL @ 220 → +110,000 → running cash = 910,000
+    # then BUY 100 GOOG @ 300 → -30,000 → closing = 880,000
+    md = generate_chain_report([DAY1, DAY2], initial_capital=initial, topk=5)
+    assert "Opening Cash" in md
+    # SELL proceeds appear as positive in the waterfall
+    assert "+$110,000.00" in md
 
 
-class TestOrderCategorisation:
-    """Verify SELL/REDUCE/BUY/INCREASE logic via markdown output."""
+def test_cash_flow_buy_decreases_cash():
+    """Buying 100 GOOG @ 300 should deduct $30,000."""
+    md = generate_chain_report([DAY1, DAY2], initial_capital=1_000_000.0, topk=5)
+    assert "−$30,000.00" in md
 
-    def test_increase_order_categorised(self):
-        data = {
-            **BASE_DATA,
-            "orders": [
-                # INCREASE: ticker already in prev_pos
-                {"ticker": "GEN", "shares": 500, "action": "buy", "price": 21.78, "reason": "add"},
-            ],
-        }
-        md = generate_report(data)
-        assert "INCREASE" in md
-        assert "GEN" in md
 
-    def test_reduce_order_categorised(self):
-        data = {
-            **BASE_DATA,
-            "orders": [
-                # REDUCE: sell but ticker still in target
-                {"ticker": "ERIE", "shares": -100, "action": "sell", "price": 259.30, "reason": "trim"},
-            ],
-            "target_positions": {**BASE_DATA["target_positions"], "ERIE": 285},
-        }
-        md = generate_report(data)
-        assert "REDUCE" in md
-        assert "ERIE" in md
+def test_first_day_opening_cash_is_initial_capital():
+    """First day's opening cash must equal initial_capital."""
+    md = generate_chain_report([DAY1], initial_capital=1_000_000.0)
+    # Opening Cash row must show $1,000,000.00
+    lines_with_opening = [l for l in md.splitlines() if "Opening Cash" in l]
+    assert lines_with_opening, "No 'Opening Cash' row found"
+    assert "$1,000,000.00" in lines_with_opening[0]
 
-    def test_sell_and_buy_action_summary(self):
-        md = generate_report(BASE_DATA)
-        # Executive summary should note both actions
-        assert "SELL" in md
-        assert "BUY" in md
+
+def test_sell_before_buy_order():
+    """SELLs must appear before BUYs in the cash flow table."""
+    md = generate_chain_report([DAY2], initial_capital=1_000_000.0)
+    sell_idx = md.index("SELL ALL")
+    buy_idx  = md.index("BUY NEW")
+    assert sell_idx < buy_idx
+
+
+# ─── P&L attribution section ──────────────────────────────────────────────────
+
+def test_position_pnl_table_present():
+    md = generate_chain_report([DAY2], initial_capital=1_000_000.0)
+    assert "Price Movements" in md
+    assert "AAPL" in md
+    assert "MSFT" in md
+
+
+def test_position_pnl_totals():
+    md = generate_chain_report([DAY2], initial_capital=1_000_000.0)
+    assert "TOTAL" in md
+    # DAY2 daily_pnl = 12,000
+    assert "+$12,000.00" in md
+
+
+def test_no_pnl_table_when_position_pnl_empty():
+    day = {**DAY1, "position_pnl": {}}
+    md = generate_chain_report([day], initial_capital=1_000_000.0)
+    assert "Price Movements" not in md
+
+
+# ─── Top-N picks section ──────────────────────────────────────────────────────
+
+def test_top_picks_only_on_current_day():
+    md = generate_chain_report([DAY1, DAY2], initial_capital=1_000_000.0, topk=3)
+    # Top picks section present
+    assert "Algorithm's Top" in md
+    # Only one picks section (for the last block)
+    assert md.count("Algorithm's Top") == 1
+
+
+def test_top_picks_count_limited_by_topk():
+    """With topk=2 only 2 tickers should appear in the picks table."""
+    md = generate_chain_report([FULL_DATA], initial_capital=1_000_000.0, topk=2)
+    assert "Algorithm's Top 2 Picks" in md
+
+
+def test_top_picks_shows_weights():
+    md = generate_chain_report([FULL_DATA], initial_capital=1_000_000.0, topk=5)
+    # Weight column header
+    assert "Weight" in md
+
+
+def test_top_picks_total_row():
+    md = generate_chain_report([FULL_DATA], initial_capital=1_000_000.0, topk=5)
+    assert "Top-5 total" in md
+
+
+# ─── SELL / BUY icons ─────────────────────────────────────────────────────────
+
+def test_sell_icon_in_table():
+    md = generate_chain_report([DAY2], initial_capital=1_000_000.0)
+    assert "🔴 SELL ALL" in md
+
+
+def test_buy_new_icon_in_table():
+    md = generate_chain_report([DAY2], initial_capital=1_000_000.0)
+    assert "🟢 BUY NEW" in md
+
+
+def test_benchmark_line_when_present():
+    md = generate_chain_report([DAY2], initial_capital=1_000_000.0)
+    assert "SPY" in md
+
+
+# ─── Hold-only day ────────────────────────────────────────────────────────────
+
+def test_hold_only_day_no_orders_section():
+    hold_day = {**DAY1, "orders": [], "previous_positions": DAY1["target_positions"]}
+    md = generate_chain_report([hold_day], initial_capital=1_000_000.0)
+    assert "No rebalancing orders" in md
+
+
+def test_hold_tickers_listed():
+    hold_day = {
+        **DAY1,
+        "orders": [],
+        "target_positions": {"AAPL": 500, "MSFT": 200},
+        "previous_positions": {"AAPL": 500, "MSFT": 200},
+    }
+    md = generate_chain_report([hold_day], initial_capital=1_000_000.0)
+    assert "Hold" in md
+
+
+# ─── Missing / partial data ───────────────────────────────────────────────────
+
+def test_missing_account_value_graceful():
+    day = {**DAY1, "account_value": None}
+    md = generate_chain_report([day], initial_capital=1_000_000.0)
+    assert "Block #1" in md
+
+
+def test_missing_daily_pnl_graceful():
+    day = {**DAY1, "daily_pnl": None}
+    md = generate_chain_report([day], initial_capital=1_000_000.0)
+    assert "Block #1" in md
+
+
+def test_zero_orders_no_crash():
+    day = {**DAY1, "orders": []}
+    md = generate_chain_report([day], initial_capital=1_000_000.0)
+    assert "Block #1" in md
+
+
+def test_empty_days_list():
+    """Empty list should at minimum produce the initial state block."""
+    md = generate_chain_report([], initial_capital=1_000_000.0)
+    assert "Block #0" in md
+    assert "Initial State" in md
+
+
+# ─── load_all_orders ──────────────────────────────────────────────────────────
+
+def _write_orders(directory: Path, date: str, account_value: float) -> None:
+    data = {
+        "date": date,
+        "account_value": account_value,
+        "orders": [],
+        "target_positions": {},
+    }
+    (directory / f"pending_orders_{date}.json").write_text(json.dumps(data))
+
+
+def test_load_orders_basic(tmp_path: Path):
+    _write_orders(tmp_path, "2026-02-20", 1_000_000.0)
+    _write_orders(tmp_path, "2026-02-21", 1_002_000.0)
+    days = load_all_orders(tmp_path)
+    assert len(days) == 2
+    assert days[0]["date"] == "2026-02-20"
+    assert days[1]["date"] == "2026-02-21"
+
+
+def test_load_orders_deduplication_live_wins(tmp_path: Path):
+    """Live-directory version must override archive for the same date."""
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    _write_orders(archive, "2026-02-23", 1_000_000.0)   # corrupted reset
+    _write_orders(tmp_path, "2026-02-23", 936_845.0)    # correct live version
+    days = load_all_orders(tmp_path)
+    assert len(days) == 1
+    assert days[0]["account_value"] == 936_845.0
+
+
+def test_load_orders_sorted_ascending(tmp_path: Path):
+    _write_orders(tmp_path, "2026-02-22", 1_007_987.0)
+    _write_orders(tmp_path, "2026-02-20", 1_000_000.0)
+    _write_orders(tmp_path, "2026-02-21", 1_000_000.0)
+    days = load_all_orders(tmp_path)
+    dates = [d["date"] for d in days]
+    assert dates == sorted(dates)
+
+
+def test_load_orders_archive_only(tmp_path: Path):
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    _write_orders(archive, "2026-02-20", 1_000_000.0)
+    _write_orders(archive, "2026-02-21", 1_002_000.0)
+    days = load_all_orders(tmp_path)
+    assert len(days) == 2
+
+
+def test_load_orders_empty_directory(tmp_path: Path):
+    days = load_all_orders(tmp_path)
+    assert days == []
+
+
+def test_load_orders_ignores_malformed_json(tmp_path: Path):
+    (tmp_path / "pending_orders_2026-02-20.json").write_text("{ broken json >>>")
+    _write_orders(tmp_path, "2026-02-21", 1_002_000.0)
+    days = load_all_orders(tmp_path)
+    assert len(days) == 1
+
+
+# ─── save_chain_report ────────────────────────────────────────────────────────
+
+def test_save_chain_report_creates_file(tmp_path: Path):
+    _write_orders(tmp_path, "2026-02-24", 990_000.0)
+    path = save_chain_report(tmp_path, initial_capital=1_000_000.0, topk=5)
+    assert path.exists()
+    assert path.name == "trading_journal.md"
+
+
+def test_save_chain_report_creates_reports_subdir(tmp_path: Path):
+    _write_orders(tmp_path, "2026-02-24", 990_000.0)
+    path = save_chain_report(tmp_path, initial_capital=1_000_000.0)
+    assert path.parent.name == "reports"
+
+
+def test_save_chain_report_custom_output_dir(tmp_path: Path):
+    _write_orders(tmp_path, "2026-02-24", 990_000.0)
+    out = tmp_path / "custom_output"
+    path = save_chain_report(tmp_path, output_dir=out, initial_capital=1_000_000.0)
+    assert path.parent == out
+
+
+def test_save_chain_report_content(tmp_path: Path):
+    _write_orders(tmp_path, "2026-02-24", 990_000.0)
+    path = save_chain_report(tmp_path, initial_capital=1_000_000.0)
+    content = path.read_text()
+    assert "Trading Journal" in content
+    assert "Block #0" in content
+
+
+# ─── Backward-compat wrappers ─────────────────────────────────────────────────
+
+def test_generate_report_backward_compat():
+    md = generate_report(FULL_DATA)
+    assert "Block #1" in md
+    assert "2026-02-24" in md
+
+
+def test_save_report_backward_compat(tmp_path: Path):
+    path = save_report(FULL_DATA, output_dir=tmp_path)
+    assert path.exists()
+    assert path.name == "trading_journal.md"
+
+
+# ─── Timestamp param ──────────────────────────────────────────────────────────
+
+def test_generated_at_in_footer():
+    ts = datetime(2026, 3, 1, 12, 0, 0, tzinfo=timezone.utc)
+    md = generate_chain_report([DAY1], initial_capital=1_000_000.0, generated_at=ts)
+    assert "2026-03-01 12:00" in md
