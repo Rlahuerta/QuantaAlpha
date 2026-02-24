@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import subprocess
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Tuple, Union
+from typing import Tuple, Union, Optional
 
 import pandas as pd
 from filelock import FileLock
@@ -14,6 +15,23 @@ from quantaalpha.core.exception import CodeFormatError, CustomRuntimeError, NoOu
 from quantaalpha.core.experiment import Experiment, FBWorkspace
 from quantaalpha.core.utils import cache_with_pickle
 from quantaalpha.llm.client import md5_hash
+
+
+@dataclass
+class FactorExecutionResult:
+    """
+    Result of factor code execution.
+
+    Attributes:
+        success: Whether execution completed successfully
+        feedback: Execution output/error message
+        result: Factor value DataFrame (None if failed)
+        error: Exception object if execution failed (None if succeeded)
+    """
+    success: bool
+    feedback: str
+    result: Optional[pd.DataFrame]
+    error: Optional[Exception] = None
 
 
 class FactorTask(CoSTEERTask):
@@ -103,9 +121,9 @@ class FactorFBWorkspace(FBWorkspace):
         )
 
     @cache_with_pickle(hash_func)
-    def execute(self, data_type: str = "Debug") -> Tuple[str, pd.DataFrame]:
+    def execute(self, data_type: str = "Debug") -> FactorExecutionResult:
         """
-        execute the implementation and get the factor value by the following steps:
+        Execute the implementation and get the factor value by the following steps:
         1. make the directory in workspace path
         2. write the code to the file in the workspace path
         3. link all the source data to the workspace path folder
@@ -114,20 +132,25 @@ class FactorFBWorkspace(FBWorkspace):
         else:
             4. generate a script from template to import the factor.py dump get the factor value to result.h5
         5. read the factor value from the output file in the workspace path folder
-        returns the execution feedback as a string and the factor value as a pandas dataframe
 
+        Returns:
+            FactorExecutionResult with success status, feedback, result DataFrame, and optional error
 
         Regarding the cache mechanism:
         1. We will store the function's return value to ensure it behaves as expected.
-        - The cached information will include a tuple with the following: (execution_feedback, executed_factor_value_dataframe, Optional[Exception])
-
+        - The cached information will include a FactorExecutionResult dataclass
         """
         super().execute()
         if self.code_dict is None or "factor.py" not in self.code_dict:
             if self.raise_exception:
                 raise CodeFormatError(self.FB_CODE_NOT_SET)
             else:
-                return self.FB_CODE_NOT_SET, None
+                return FactorExecutionResult(
+                    success=False,
+                    feedback=self.FB_CODE_NOT_SET,
+                    result=None,
+                    error=CodeFormatError(self.FB_CODE_NOT_SET)
+                )
         with FileLock(self.workspace_path / "execution.lock"):
             # Set data path for all versions
             source_data_path = (
@@ -169,14 +192,31 @@ class FactorFBWorkspace(FBWorkspace):
             try:
                 # Set PYTHONPATH to include the project root so quantaalpha can be imported
                 import os
-                env = os.environ.copy()
+                import resource
+
+                # Whitelist of safe environment variables to pass to subprocess
+                SAFE_ENV_VARS = frozenset({
+                    'PATH', 'HOME', 'USER', 'CONDA_PREFIX', 'PYTHONPATH',
+                    'LD_LIBRARY_PATH', 'LANG', 'LC_ALL', 'TZ'
+                })
+
+                # Create restricted environment (avoid leaking secrets)
+                env = {k: v for k, v in os.environ.items() if k in SAFE_ENV_VARS}
                 project_root = Path(__file__).parent.parent.parent.parent
-                pythonpath = str(project_root)
-                if 'PYTHONPATH' in env:
-                    env['PYTHONPATH'] = pythonpath + ':' + env['PYTHONPATH']
-                else:
-                    env['PYTHONPATH'] = pythonpath
-                
+                env['PYTHONPATH'] = str(project_root)
+
+                # Define resource limit function for Unix systems
+                def set_limits():
+                    # Limit memory to 2GB
+                    resource.setrlimit(resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))
+                    # Limit CPU time to timeout value
+                    resource.setrlimit(resource.RLIMIT_CPU, (
+                        FACTOR_COSTEER_SETTINGS.file_based_execution_timeout,
+                        FACTOR_COSTEER_SETTINGS.file_based_execution_timeout
+                    ))
+                    # Disable core dumps (prevent sensitive data leakage)
+                    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+
                 subprocess.check_output(
                     [FACTOR_COSTEER_SETTINGS.python_bin, str(execution_code_path.absolute())],
                     shell=False,
@@ -184,6 +224,7 @@ class FactorFBWorkspace(FBWorkspace):
                     stderr=subprocess.STDOUT,
                     timeout=FACTOR_COSTEER_SETTINGS.file_based_execution_timeout,
                     env=env,
+                    preexec_fn=set_limits if os.name != 'nt' else None,
                 )
                 execution_success = True
             except subprocess.CalledProcessError as e:
@@ -225,7 +266,12 @@ class FactorFBWorkspace(FBWorkspace):
                 else:
                     execution_error = NoOutputError(execution_feedback)
 
-        return execution_feedback, executed_factor_value_dataframe
+        return FactorExecutionResult(
+            success=execution_success and executed_factor_value_dataframe is not None,
+            feedback=execution_feedback,
+            result=executed_factor_value_dataframe,
+            error=execution_error
+        )
 
     def __str__(self) -> str:
         # NOTE:

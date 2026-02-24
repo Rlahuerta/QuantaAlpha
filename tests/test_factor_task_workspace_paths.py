@@ -57,9 +57,11 @@ def test_factor_workspace_execute_code_not_set_branches(monkeypatch, tmp_path):
     ws = FactorFBWorkspace(target_task=task, raise_exception=False)
     ws.code_dict = {}
 
-    feedback, result = ws.execute()
-    assert feedback == FactorFBWorkspace.FB_CODE_NOT_SET
-    assert result is None
+    exec_result = ws.execute()
+    assert exec_result.success is False
+    assert exec_result.feedback == FactorFBWorkspace.FB_CODE_NOT_SET
+    assert exec_result.result is None
+    assert isinstance(exec_result.error, CodeFormatError)
 
     ws_raise = FactorFBWorkspace(target_task=task, raise_exception=True)
     ws_raise.code_dict = {}
@@ -79,7 +81,7 @@ def test_factor_workspace_execute_success_and_output_read(monkeypatch, tmp_path)
     ws = FactorFBWorkspace(target_task=task, raise_exception=False)
     ws.inject_code(**{"factor.py": "print('ok')"})
 
-    def _fake_check_output(cmd, shell, cwd, stderr, timeout, env):
+    def _fake_check_output(cmd, shell, cwd, stderr, timeout, env, preexec_fn=None):
         idx = pd.MultiIndex.from_product(
             [pd.date_range("2024-01-01", periods=2), ["AAA"]],
             names=["datetime", "instrument"],
@@ -88,10 +90,11 @@ def test_factor_workspace_execute_success_and_output_read(monkeypatch, tmp_path)
         return b"done"
 
     monkeypatch.setattr(factor_module.subprocess, "check_output", _fake_check_output)
-    feedback, result = ws.execute(data_type="Debug")
+    exec_result = ws.execute(data_type="Debug")
 
-    assert ws.FB_OUTPUT_FILE_FOUND in feedback
-    assert isinstance(result, pd.DataFrame)
+    assert ws.FB_OUTPUT_FILE_FOUND in exec_result.feedback
+    assert exec_result.success is True
+    assert isinstance(exec_result.result, pd.DataFrame)
     assert "File Factor[ok-run]" in str(ws)
     assert repr(ws) == str(ws)
 
@@ -116,10 +119,11 @@ def test_factor_workspace_execute_version2_timeout_and_missing_output(monkeypatc
         raise subprocess.TimeoutExpired(cmd="python factor.py", timeout=1)
 
     monkeypatch.setattr(factor_module.subprocess, "check_output", _raise_timeout)
-    feedback, result = ws.execute(data_type="Train")
-    assert "timeout error" in feedback.lower()
-    assert ws.FB_OUTPUT_FILE_NOT_FOUND in feedback
-    assert result is None
+    exec_result = ws.execute(data_type="Train")
+    assert "timeout error" in exec_result.feedback.lower()
+    assert ws.FB_OUTPUT_FILE_NOT_FOUND in exec_result.feedback
+    assert exec_result.result is None
+    assert exec_result.success is False
 
     ws_raise = FactorFBWorkspace(target_task=task, raise_exception=True)
     ws_raise.inject_code(**{"factor.py": "print('ok')"})
@@ -143,10 +147,11 @@ def test_factor_workspace_called_process_error_branches(monkeypatch, tmp_path):
         raise subprocess.CalledProcessError(returncode=1, cmd="python factor.py", output=long_error)
 
     monkeypatch.setattr(factor_module.subprocess, "check_output", _raise_called)
-    feedback, result = ws.execute()
-    assert "hidden long error message" in feedback
-    assert ws.FB_OUTPUT_FILE_NOT_FOUND in feedback
-    assert result is None
+    exec_result = ws.execute()
+    assert "hidden long error message" in exec_result.feedback
+    assert ws.FB_OUTPUT_FILE_NOT_FOUND in exec_result.feedback
+    assert exec_result.result is None
+    assert exec_result.success is False
 
     ws_raise = FactorFBWorkspace(target_task=task, raise_exception=True)
     ws_raise.inject_code(**{"factor.py": "print('bad')"})
@@ -164,18 +169,20 @@ def test_factor_workspace_output_read_error_and_no_output_exception(monkeypatch,
     ws = FactorFBWorkspace(target_task=task, raise_exception=False)
     ws.inject_code(**{"factor.py": "print('ok')"})
 
-    def _write_invalid_h5(cmd, shell, cwd, stderr, timeout, env):
+    def _write_invalid_h5(*args, **kwargs):
+        cwd = kwargs.get('cwd', args[2] if len(args) > 2 else '/tmp')
         (Path(cwd) / "result.h5").write_text("not hdf", encoding="utf-8")
         return b"done"
 
     monkeypatch.setattr(factor_module.subprocess, "check_output", _write_invalid_h5)
-    feedback, result = ws.execute()
-    assert "Error found when reading hdf file" in feedback
-    assert result is None
+    exec_result = ws.execute()
+    assert "Error found when reading hdf file" in exec_result.feedback
+    assert exec_result.result is None
+    assert exec_result.success is False
 
     ws_no_output = FactorFBWorkspace(target_task=task, raise_exception=True)
     ws_no_output.inject_code(**{"factor.py": "print('ok')"})
-    monkeypatch.setattr(factor_module.subprocess, "check_output", lambda *args, **kwargs: b"done")
+    monkeypatch.setattr(factor_module.subprocess, "check_output", lambda *args, preexec_fn=None, **kwargs: b"done")
     with pytest.raises(NoOutputError):
         ws_no_output.execute()
 

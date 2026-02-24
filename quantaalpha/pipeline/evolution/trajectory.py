@@ -8,6 +8,7 @@ hypothesis → factor expressions → code → backtest results → feedback.
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from enum import Enum
@@ -158,17 +159,18 @@ class TrajectoryPool:
     def __init__(self, save_path: Optional[Path] = None, fresh_start: bool = True):
         """
         Initialize trajectory pool.
-        
+
         Args:
             save_path: Path to save/load pool state. If None, pool is memory-only.
             fresh_start: If True, start with empty pool even if save_path exists.
                         If False, load existing data from save_path.
         """
         self.save_path = Path(save_path) if save_path else None
+        self._lock = threading.Lock()
         self._trajectories: dict[str, StrategyTrajectory] = {}
         self._by_direction: dict[int, list[str]] = {}  # direction_id -> [traj_ids]
         self._by_phase: dict[RoundPhase, list[str]] = {p: [] for p in RoundPhase}
-        
+
         # Only load existing data if fresh_start is False
         if not fresh_start and self.save_path and self.save_path.exists():
             self._load()
@@ -178,55 +180,61 @@ class TrajectoryPool:
     def add(self, trajectory: StrategyTrajectory) -> str:
         """
         Add a trajectory to the pool.
-        
+
         Args:
             trajectory: The trajectory to add
-            
+
         Returns:
             The trajectory ID
         """
-        tid = trajectory.trajectory_id
-        self._trajectories[tid] = trajectory
-        
-        # Index by direction
-        if trajectory.direction_id not in self._by_direction:
-            self._by_direction[trajectory.direction_id] = []
-        self._by_direction[trajectory.direction_id].append(tid)
-        
-        # Index by phase
-        self._by_phase[trajectory.phase].append(tid)
-        
-        logger.info(f"Added trajectory {tid} (direction={trajectory.direction_id}, "
-                   f"phase={trajectory.phase.value}, round={trajectory.round_idx})")
-        
-        if self.save_path:
-            self._save()
-        
-        return tid
-    
+        with self._lock:
+            tid = trajectory.trajectory_id
+            self._trajectories[tid] = trajectory
+
+            # Index by direction
+            if trajectory.direction_id not in self._by_direction:
+                self._by_direction[trajectory.direction_id] = []
+            self._by_direction[trajectory.direction_id].append(tid)
+
+            # Index by phase
+            self._by_phase[trajectory.phase].append(tid)
+
+            logger.info(f"Added trajectory {tid} (direction={trajectory.direction_id}, "
+                       f"phase={trajectory.phase.value}, round={trajectory.round_idx})")
+
+            if self.save_path:
+                self._save()
+
+            return tid
+
     def get(self, trajectory_id: str) -> Optional[StrategyTrajectory]:
         """Get a trajectory by ID."""
-        return self._trajectories.get(trajectory_id)
-    
+        with self._lock:
+            return self._trajectories.get(trajectory_id)
+
     def get_by_direction(self, direction_id: int) -> list[StrategyTrajectory]:
         """Get all trajectories for a direction."""
-        tids = self._by_direction.get(direction_id, [])
-        return [self._trajectories[tid] for tid in tids]
-    
+        with self._lock:
+            tids = self._by_direction.get(direction_id, [])
+            return [self._trajectories[tid] for tid in tids]
+
     def get_by_phase(self, phase: RoundPhase) -> list[StrategyTrajectory]:
         """Get all trajectories of a specific phase."""
-        tids = self._by_phase.get(phase, [])
-        return [self._trajectories[tid] for tid in tids]
-    
+        with self._lock:
+            tids = self._by_phase.get(phase, [])
+            return [self._trajectories[tid] for tid in tids]
+
     def get_all(self) -> list[StrategyTrajectory]:
         """Get all trajectories."""
-        return list(self._trajectories.values())
-    
+        with self._lock:
+            return list(self._trajectories.values())
+
     def get_latest_round_idx(self) -> int:
         """Get the highest round index across all trajectories."""
-        if not self._trajectories:
-            return -1
-        return max(t.round_idx for t in self._trajectories.values())
+        with self._lock:
+            if not self._trajectories:
+                return -1
+            return max(t.round_idx for t in self._trajectories.values())
     
     def select_parents_for_mutation(self, direction_id: int) -> Optional[StrategyTrajectory]:
         """
@@ -383,20 +391,22 @@ class TrajectoryPool:
     
     def get_statistics(self) -> dict[str, Any]:
         """Get pool statistics."""
-        return {
-            "total_trajectories": len(self._trajectories),
-            "by_phase": {p.value: len(ids) for p, ids in self._by_phase.items()},
-            "by_direction": {d: len(ids) for d, ids in self._by_direction.items()},
-            "successful_trajectories": sum(1 for t in self._trajectories.values() if t.is_successful()),
-            "latest_round": self.get_latest_round_idx(),
-        }
-    
+        with self._lock:
+            return {
+                "total_trajectories": len(self._trajectories),
+                "by_phase": {p.value: len(ids) for p, ids in self._by_phase.items()},
+                "by_direction": {d: len(ids) for d, ids in self._by_direction.items()},
+                "successful_trajectories": sum(1 for t in self._trajectories.values() if t.is_successful()),
+                "latest_round": self.get_latest_round_idx(),
+            }
+
     def clear(self):
         """Clear all trajectories from the pool."""
-        self._trajectories.clear()
-        self._by_direction.clear()
-        self._by_phase = {p: [] for p in RoundPhase}
-        logger.info("Trajectory pool cleared")
+        with self._lock:
+            self._trajectories.clear()
+            self._by_direction.clear()
+            self._by_phase = {p: [] for p in RoundPhase}
+            logger.info("Trajectory pool cleared")
     
     def cleanup_file(self):
         """Delete the trajectory pool file from disk."""

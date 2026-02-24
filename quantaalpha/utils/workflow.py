@@ -21,6 +21,12 @@ from quantaalpha.core.exception import CoderError
 from quantaalpha.log import logger
 import threading
 
+
+class MiningStoppedError(Exception):
+    """Exception raised when mining is stopped via stop_event."""
+    pass
+
+
 class LoopMeta(type):
     @staticmethod
     def _get_steps(bases):
@@ -122,6 +128,14 @@ class LoopBase:
                     logger.warning(f"Traceback loop {li} due to {e}")
                     self.step_idx = 0
                     continue
+                except Exception as e:
+                    if "Mining stopped" in str(e):
+                        logger.info(f"Mining stopped at loop {li}, step {si}")
+                        raise
+                    raise
+                except MiningStoppedError as e:
+                    logger.info(f"Mining stopped gracefully at loop {li}, step {si}")
+                    raise
 
                 end = datetime.datetime.now(datetime.timezone.utc)
 
@@ -140,8 +154,8 @@ class LoopBase:
                 self.dump(self.session_folder / f"{li}" / f"{si}_{name}")  # save a snapshot after the session
                 
                 if stop_event is not None and stop_event.is_set():
-                    # break
-                    raise Exception("Mining stopped by user")
+                    logger.info("Mining stopped by user (stop_event triggered)")
+                    break  # Clean exit instead of exception
                     
                 
     def dump(self, path: str | Path):

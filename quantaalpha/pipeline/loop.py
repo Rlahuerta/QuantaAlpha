@@ -35,18 +35,19 @@ from tqdm.auto import tqdm
 from quantaalpha.core.exception import CoderError
 from quantaalpha.log import logger
 from functools import wraps
-
-# Module-level stop event (initialized to None)
-STOP_EVENT = None
+from quantaalpha.utils.workflow import MiningStoppedError
 
 
 def stop_event_check(func):
+    """
+    Decorator to check stop_event before executing a step.
+    Uses only instance-level _stop_event to avoid race conditions.
+    """
     @wraps(func)
     def wrapper(self, *args, **kwargs):
-        # Check instance-level stop_event first, then fall back to global
-        stop_event = getattr(self, '_stop_event', None) or STOP_EVENT
+        stop_event = getattr(self, '_stop_event', None)
         if stop_event is not None and stop_event.is_set():
-            raise Exception("Operation stopped due to stop_event flag.")
+            raise MiningStoppedError("Mining stopped by user")
         return func(self, *args, **kwargs)
     return wrapper
 
@@ -129,9 +130,9 @@ class AlphaAgentLoop(LoopBase, metaclass=LoopMeta):
             self.summarizer: HypothesisExperiment2Feedback = import_class(PROP_SETTING.summarizer)(scen)
             logger.log_object(self.summarizer, tag="summarizer")
             self.trace = Trace(scen=scen)
-            
-            global STOP_EVENT
-            STOP_EVENT = stop_event
+
+            # Store stop_event as instance variable (not global) to avoid race conditions
+            self._stop_event = stop_event
             super().__init__()
 
     @classmethod
