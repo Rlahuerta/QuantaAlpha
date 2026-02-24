@@ -26,7 +26,9 @@ import json
 import logging
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+import csv
 
 logger = logging.getLogger(__name__)
 
@@ -49,10 +51,14 @@ class PositionTracker:
         positions_file: str | Path = "data/live/positions.json",
         pnl_dir: str | Path = "data/live/pnl",
         benchmark_ticker: str = "SPY",
+        initial_capital: float = 1_000_000,
     ) -> None:
         self.positions_file = Path(positions_file)
         self.pnl_dir = Path(pnl_dir)
         self.benchmark_ticker = benchmark_ticker
+        self.initial_capital = initial_capital
+        # Ledger lives alongside positions_file
+        self.ledger_path = self.positions_file.parent / "ledger.csv"
 
     # ------------------------------------------------------------------
     # State management
@@ -182,6 +188,7 @@ class PositionTracker:
         daily_pnl_dict: Dict,
         as_of: Optional[date] = None,
         prices: Optional[Dict[str, float]] = None,
+        benchmark_return: float = 0.0,
     ) -> Dict:
         """Build and persist the daily snapshot.
 
@@ -201,13 +208,17 @@ class PositionTracker:
         today = (as_of or date.today()).isoformat()
         prev_state = self.load_state()
 
-        # Bug fix #2: compute cash as residual (positions may not use 100% capital)
+        # Carry forward initial_capital from previous state or use config value
+        initial_cap = prev_state.get("initial_capital", self.initial_capital)
+
+        # Compute cash as residual (positions may not use 100% capital)
+        invested = 0.0
         cash = 0.0
         if prices and positions:
-            mtm = self.mark_to_market(positions, prices)
-            cash = round(account_value - mtm, 2)
+            invested = self.mark_to_market(positions, prices)
+            cash = round(account_value - invested, 2)
 
-        # Bug fix #1: idempotency — detect same-day re-run
+        # Idempotency — detect same-day re-run
         prev_date = prev_state.get("date")
         if prev_date == today:
             logger.info("Same-day re-run detected for %s — overwriting without re-accumulating", today)
@@ -217,20 +228,23 @@ class PositionTracker:
             prev_cum = prev_state.get("pnl", {}).get("cumulative_excess_return", 0.0)
             prev_cum_pnl = prev_state.get("pnl", {}).get("cumulative_pnl", 0.0)
 
+        daily_pnl = daily_pnl_dict.get("daily_pnl", 0.0)
+        cum_pnl = round(prev_cum_pnl + daily_pnl, 2)
+        daily_excess = daily_pnl_dict.get("daily_excess_return", 0.0)
+        cum_excess = round(prev_cum + daily_excess, 6)
+
         state = {
             "date": today,
+            "initial_capital": initial_cap,
             "positions": positions,
             "account_value": round(account_value, 2),
             "cash": cash,
             "pnl": {
-                "daily_pnl": daily_pnl_dict.get("daily_pnl", 0.0),
-                "cumulative_pnl": round(prev_cum_pnl + daily_pnl_dict.get("daily_pnl", 0.0), 2),
+                "daily_pnl": daily_pnl,
+                "cumulative_pnl": cum_pnl,
                 "daily_return": daily_pnl_dict.get("portfolio_return", 0.0),
-                "daily_excess_return": daily_pnl_dict.get("daily_excess_return", 0.0),
-                "cumulative_excess_return": round(
-                    prev_cum + daily_pnl_dict.get("daily_excess_return", 0.0), 6
-                ),
-                # Bug fix #3: actual position count, not price-available count
+                "daily_excess_return": daily_excess,
+                "cumulative_excess_return": cum_excess,
                 "num_positions": len(positions),
                 # Store previous-day base for idempotent re-runs
                 "_prev_day_cumulative_pnl": prev_cum_pnl,
@@ -244,6 +258,22 @@ class PositionTracker:
         self.pnl_dir.mkdir(parents=True, exist_ok=True)
         history_file = self.pnl_dir / f"pnl_{today}.json"
         history_file.write_text(json.dumps(state, indent=2))
+
+        # Append to ledger CSV
+        self._append_ledger(
+            date_str=today,
+            initial_capital=initial_cap,
+            account_value=round(account_value, 2),
+            daily_pnl=daily_pnl,
+            cumulative_pnl=cum_pnl,
+            daily_return=daily_pnl_dict.get("portfolio_return", 0.0),
+            cum_excess_return=cum_excess,
+            num_positions=len(positions),
+            invested=round(invested, 2),
+            cash=cash,
+            benchmark_return=benchmark_return,
+        )
+
         logger.info(
             "P&L recorded: date=%s daily_pnl=%.2f excess=%.4f cumulative=%.4f",
             today,
@@ -252,6 +282,56 @@ class PositionTracker:
             state["pnl"]["cumulative_excess_return"],
         )
         return state
+
+    # ------------------------------------------------------------------
+    # Ledger
+    # ------------------------------------------------------------------
+
+    LEDGER_COLUMNS = [
+        "date", "initial_capital", "account_value", "daily_pnl",
+        "cumulative_pnl", "daily_return", "cum_excess_return",
+        "num_positions", "invested", "cash", "benchmark_return",
+    ]
+
+    def _append_ledger(self, **row: Any) -> None:
+        """Append a single row to the CSV ledger.
+
+        Idempotent: if a row for the same date already exists, it is replaced.
+        """
+        ledger = self.ledger_path
+        rows: List[Dict] = []
+        if ledger.exists():
+            with open(ledger, newline="") as f:
+                reader = csv.DictReader(f)
+                rows = [r for r in reader if r.get("date") != row.get("date_str", row.get("date"))]
+
+        # Normalize key names
+        new_row = {col: row.get(col, "") for col in self.LEDGER_COLUMNS}
+        if "date_str" in row:
+            new_row["date"] = row["date_str"]
+        rows.append(new_row)
+
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        with open(ledger, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=self.LEDGER_COLUMNS)
+            writer.writeheader()
+            writer.writerows(rows)
+        logger.debug("Ledger updated: %s (%d rows)", ledger, len(rows))
+
+    def load_ledger(self, last_n: int = 30) -> List[Dict]:
+        """Load the last *last_n* rows from the ledger CSV."""
+        if not self.ledger_path.exists():
+            return []
+        with open(self.ledger_path, newline="") as f:
+            rows = list(csv.DictReader(f))
+        # Convert numeric columns
+        for r in rows:
+            for col in self.LEDGER_COLUMNS[1:]:  # skip date
+                try:
+                    r[col] = float(r[col]) if r.get(col) else 0.0
+                except (ValueError, TypeError):
+                    r[col] = 0.0
+        return rows[-last_n:] if len(rows) > last_n else rows
 
     # ------------------------------------------------------------------
     # Reporting

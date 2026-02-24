@@ -167,8 +167,20 @@ if result.get('kill_switch'):
 from datetime import date
 result['orders_file'] = f'$ORDERS_DIR/pending_orders_{date.today().isoformat()}.json'
 
+# Load trading ledger for history section
+from quantaalpha.live.position_tracker import PositionTracker
+import yaml as _y
+with open('$CONFIG') as _f:
+    _cfg = _y.safe_load(_f)
+_out = _cfg.get('output', {})
+tracker = PositionTracker(
+    positions_file=_out.get('positions_file', 'data/live/positions.json'),
+    pnl_dir=_out.get('pnl_dir', 'data/live/pnl'),
+)
+ledger = tracker.load_ledger(last_n=10)
+
 # Render the actionable trading report
-render_report(result)
+render_report(result, ledger=ledger)
 "
     echo ""
 fi

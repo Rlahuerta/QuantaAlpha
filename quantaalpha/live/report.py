@@ -57,8 +57,18 @@ def _pnl_color(val: float) -> str:
 
 # ── Main renderer ────────────────────────────────────────────────────
 
-def render_report(data: Dict[str, Any], *, file=None) -> None:
-    """Print a formatted trading report to *file* (default: stdout)."""
+def render_report(data: Dict[str, Any], *, file=None, ledger: List[Dict] = None) -> None:
+    """Print a formatted trading report to *file* (default: stdout).
+
+    Parameters
+    ----------
+    data : dict
+        Order data from scheduler or loaded JSON file.
+    file :
+        Output stream (default: stdout).
+    ledger : list of dict, optional
+        Trailing daily performance rows from ``PositionTracker.load_ledger()``.
+    """
     out = file or sys.stdout
 
     def p(line: str = "") -> None:
@@ -66,6 +76,7 @@ def render_report(data: Dict[str, Any], *, file=None) -> None:
 
     date_str = data.get("date", "?")
     account = data.get("account_value", 0)
+    initial_cap = data.get("initial_capital", 0)
     daily_pnl = data.get("daily_pnl", 0)
     cash = data.get("cash", 0) or 0
     cum_pnl = data.get("cumulative_pnl", 0) or 0
@@ -107,7 +118,12 @@ def render_report(data: Dict[str, Any], *, file=None) -> None:
     # ── Account Summary ──────────────────────────────────────────
     p()
     p(_bold("  📊 ACCOUNT SUMMARY"))
-    p(f"  Account Value:    ${account:>12,.2f}")
+    if initial_cap:
+        total_return = (account - initial_cap) / initial_cap if initial_cap else 0
+        p(f"  Initial Capital:  ${initial_cap:>12,.0f}")
+        p(f"  Account Value:    ${account:>12,.2f}  ({total_return:+.2%} total)")
+    else:
+        p(f"  Account Value:    ${account:>12,.2f}")
     daily_ret = daily_pnl / (account - daily_pnl) if account and account != daily_pnl else 0
     p(f"  Daily P&L:        {_pnl_color(daily_pnl):>24s}  ({daily_ret:+.2%})")
     if bench:
@@ -267,6 +283,33 @@ def render_report(data: Dict[str, Any], *, file=None) -> None:
     if cash:
         p(f"  {'':>3s}  {'':6s}  {'':>7s}  {'CASH':>9s}  ${cash:>10,.0f}")
 
+    # ── Trailing Performance ─────────────────────────────────────
+    if ledger and len(ledger) > 1:
+        p()
+        p(_bold("  📅 TRADING HISTORY"))
+        p(f"  {'Date':<12s} {'Account':>12s} {'Daily P&L':>12s} "
+          f"{'Cumul P&L':>12s} {'Pos':>4s} {'Cash':>10s}")
+        p(f"  {'──────────':<12s} {'────────────':>12s} {'────────────':>12s} "
+          f"{'────────────':>12s} {'────':>4s} {'──────────':>10s}")
+        for row in ledger:
+            d_pnl = float(row.get("daily_pnl", 0))
+            c_pnl = float(row.get("cumulative_pnl", 0))
+            acct = float(row.get("account_value", 0))
+            npos = int(float(row.get("num_positions", 0)))
+            csh = float(row.get("cash", 0))
+            # Use plain formatting (no ANSI) for table alignment
+            d_str = f"${d_pnl:>+10,.0f}"
+            c_str = f"${c_pnl:>+10,.0f}"
+            d_colored = _green(d_str) if d_pnl > 0 else _red(d_str) if d_pnl < 0 else d_str
+            c_colored = _green(c_str) if c_pnl > 0 else _red(c_str) if c_pnl < 0 else c_str
+            # ANSI codes add 9 chars, so pad accordingly
+            ansi_pad = 9 if _USE_COLOR and d_pnl != 0 else 0
+            ansi_pad_c = 9 if _USE_COLOR and c_pnl != 0 else 0
+            p(f"  {row.get('date', '?'):<12s} ${acct:>11,.0f} "
+              f"{d_colored:>{12 + ansi_pad}s} "
+              f"{c_colored:>{12 + ansi_pad_c}s} "
+              f"{npos:>4d} ${csh:>9,.0f}")
+
     # ── Footer ───────────────────────────────────────────────────
     p()
     p(sep)
@@ -280,13 +323,34 @@ def render_report(data: Dict[str, Any], *, file=None) -> None:
 # ── CLI entry point ──────────────────────────────────────────────────
 
 def main() -> None:
-    """Read order_data JSON from stdin or file arg and render report."""
+    """Read order_data JSON from stdin or file arg and render report.
+
+    If the order file lives in a directory containing ``ledger.csv``,
+    the trailing performance history is loaded and included.
+    """
     if len(sys.argv) > 1:
         path = Path(sys.argv[1])
         data = json.loads(path.read_text())
     else:
         data = json.load(sys.stdin)
-    render_report(data)
+
+    # Try loading ledger from same directory as the order file
+    ledger_rows: List[Dict] = []
+    orders_dir = Path(sys.argv[1]).parent if len(sys.argv) > 1 else Path("data/live")
+    ledger_path = orders_dir / "ledger.csv"
+    if ledger_path.exists():
+        import csv
+        with open(ledger_path, newline="") as f:
+            ledger_rows = list(csv.DictReader(f))
+        for r in ledger_rows:
+            for col in r:
+                if col != "date":
+                    try:
+                        r[col] = float(r[col]) if r.get(col) else 0.0
+                    except (ValueError, TypeError):
+                        r[col] = 0.0
+
+    render_report(data, ledger=ledger_rows[-10:] if ledger_rows else None)
 
 
 if __name__ == "__main__":

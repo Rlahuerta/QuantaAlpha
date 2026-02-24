@@ -73,6 +73,7 @@ class TradingScheduler:
         tracker = PositionTracker(
             positions_file=out_cfg.get("positions_file", "data/live/positions.json"),
             pnl_dir=out_cfg.get("pnl_dir", "data/live/pnl"),
+            initial_capital=capital,
         )
         kill_switch = KillSwitch(
             daily_loss_limit_pct=float(risk_cfg.get("daily_loss_limit_pct", 0.03)),
@@ -141,6 +142,7 @@ class TradingScheduler:
                 account_value=account_after_pnl,
                 daily_pnl_dict=daily_pnl_dict,
                 prices=prices_today,
+                benchmark_return=benchmark_return,
             )
             return {"kill_switch": True, "daily_pnl": daily_pnl}
 
@@ -167,6 +169,7 @@ class TradingScheduler:
             account_value=account_after_pnl,
             daily_pnl_dict=daily_pnl_dict,
             prices=prices_today,
+            benchmark_return=benchmark_return,
         )
         account_value = day_state["account_value"]
 
@@ -193,6 +196,7 @@ class TradingScheduler:
         order_data: Dict[str, Any] = {
             "date": today,
             "as_of": today,
+            "initial_capital": capital,
             "scores_count": len(scores),
             "daily_pnl": daily_pnl,
             "account_value": round(account_value, 2),
