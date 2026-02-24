@@ -751,13 +751,20 @@ class APIBackend:
                 # DashScope embedding: use smaller batch to avoid overload
                 batch_size = min(batch_size, 3)
                 # DashScope embedding: smaller batch (silent)
-            
+
             batch_wait_seconds = LLM_SETTINGS.embedding_batch_wait_seconds
             batches = [
                 filtered_input_content_list[i : i + batch_size]
                 for i in range(0, len(filtered_input_content_list), batch_size)
             ]
-            
+
+            # Strip litellm provider prefix (e.g. "ollama/mxbai-embed-large" → "mxbai-embed-large")
+            # when calling the OpenAI-compatible endpoint directly.  The prefix is needed by
+            # litellm (rdagent) for auto-routing, but Ollama's /v1/embeddings endpoint rejects it.
+            api_embedding_model = self.embedding_model
+            if not self.use_azure and "/" in api_embedding_model:
+                api_embedding_model = api_embedding_model.split("/", 1)[1]
+
             for batch_idx, sliced_filtered_input_content_list in enumerate(batches):
                 if self.use_azure:
                     response = self.embedding_client.embeddings.create(
@@ -766,7 +773,7 @@ class APIBackend:
                     )
                 else:
                     response = self.embedding_client.embeddings.create(
-                        model=self.embedding_model,
+                        model=api_embedding_model,
                         input=sliced_filtered_input_content_list,
                     )
                 for index, data in enumerate(response.data):
