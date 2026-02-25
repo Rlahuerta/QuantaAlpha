@@ -228,8 +228,8 @@ class FactorFBWorkspace(FBWorkspace):
 
                 # Define resource limit function for Unix systems
                 def set_limits():
-                    # Limit memory to 2GB
-                    resource.setrlimit(resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))
+                    # Limit virtual address space to 8GB (Python + numpy + pandas need ~3.2GB alone)
+                    resource.setrlimit(resource.RLIMIT_AS, (8 * 1024**3, 8 * 1024**3))
                     # Limit CPU time to timeout value
                     resource.setrlimit(resource.RLIMIT_CPU, (
                         FACTOR_COSTEER_SETTINGS.file_based_execution_timeout,
