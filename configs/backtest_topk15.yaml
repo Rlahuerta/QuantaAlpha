@@ -1,0 +1,179 @@
+######################################################################
+# Backtest tool V2 configuration
+# Supports Qlib official factor sets (alpha158/alpha360) and custom factor JSON
+#
+# Usage:
+#   python backtest_v2/run_backtest.py -c backtest_v2/config.yaml --factor-source alpha158
+#   python backtest_v2/run_backtest.py -c backtest_v2/config.yaml --factor-source custom --factor-json /path/to/factors.json
+######################################################################
+
+# Global random seed (for reproducibility)
+random_seed: 42
+
+experiment:
+  name: "backtest_v2_experiment"
+  recorder: "backtest_v2_recorder"
+  output_dir: "data/results/backtest_v2_results"
+  output_metrics_file: "backtest_metrics.json"
+
+######################################################################
+# 1. Factor source (factor_source)
+######################################################################
+
+factor_source:
+  # type: alpha158 | alpha158_20 | alpha360 | custom | combined
+  type: "alpha158_20"
+
+  # Custom factor library (when type is "custom" or "combined")
+  custom:
+    json_files: []
+    # quality_filter: high_quality | medium_quality | low_quality | null
+    quality_filter: null
+    max_factors: null
+    use_llm_for_incompatible: true
+
+  combined:
+    official_source: "alpha158_20"
+    include_custom: true
+
+######################################################################
+# 2. Data and market (data)
+######################################################################
+
+data:
+  provider_uri: "~/.qlib/qlib_data/cn_data"
+  region: "cn"
+  market: "csi300"
+  start_time: "2016-01-01"
+  end_time: "2025-12-26"
+
+######################################################################
+# 3. Dataset and preprocessing (dataset)
+######################################################################
+
+dataset:
+  # Multi-period label: 50% 1-day + 30% 5-day + 20% 20-day forward return.
+  # Blending horizons reduces label noise while preserving short-term alpha.
+  label: "(Ref($close, -2) / Ref($close, -1) - 1) * 0.5 + (Ref($close, -6) / Ref($close, -1) - 1) * 0.3 + (Ref($close, -21) / Ref($close, -1) - 1) * 0.2"
+
+  learn_processors:
+    - class: "Fillna"
+      kwargs:
+        fields_group: "feature"
+    - class: "ProcessInf"
+    - class: "DropnaLabel"
+    - class: "CSRankNorm"
+      kwargs:
+        fields_group: "feature"
+    - class: "CSRankNorm"
+      kwargs:
+        fields_group: "label"
+
+  infer_processors:
+    - class: "Fillna"
+      kwargs:
+        fields_group: "feature"
+    - class: "ProcessInf"
+    - class: "CSRankNorm"
+      kwargs:
+        fields_group: "feature"
+    - class: "CSRankNorm"
+      kwargs:
+        fields_group: "label"
+
+  segments:
+    train: ["2016-01-01", "2020-12-31"]
+    valid: ["2021-01-01", "2021-12-31"]
+    test:  ["2022-01-01", "2025-12-26"]
+
+######################################################################
+# 4. Model (model)
+######################################################################
+
+model:
+  type: "lgb"
+  # Two-stage training: after early-stopping finds best_rounds on val set,
+  # retrain on train+val combined using best_rounds; ensemble 40/60 with base model.
+  extended_training: true
+  params:
+    loss: "mse"
+    learning_rate: 0.1
+    max_depth: 8
+    num_leaves: 210
+    colsample_bytree: 0.8879
+    subsample: 0.8789
+    lambda_l1: 205.6999
+    lambda_l2: 580.9768
+    num_threads: 20
+    seed: 42
+    random_state: 42
+    early_stopping_round: 50
+    num_boost_round: 500
+    min_child_samples: 100
+    feature_fraction_bynode: 0.8
+
+######################################################################
+# 5. Backtest and portfolio (backtest)
+######################################################################
+
+backtest:
+  strategy:
+    class: "TopkDropoutStrategy"
+    module_path: "qlib.contrib.strategy"
+    kwargs:
+      signal: "<PRED>"
+      topk: 15
+      n_drop: 2
+    # rebalance_freq: 1  # 1=daily (default); 5=weekly; signal is forward-filled between rebalances
+    rebalance_freq: 1
+    # Alternative: SignalWeightedTopkStrategy (quantaalpha.backtest.strategy) with
+    # weight_scheme: "linear_rank" — NOTE: only use with weekly rebalancing or
+    # membership-change-only rebalancing; daily weight rebalancing causes ~9%/yr cost drag.
+
+  backtest:
+    start_time: "2022-01-01"
+    end_time: "2025-12-26"
+    account: 100000000
+    benchmark: "SH000300"
+    exchange_kwargs:
+      limit_threshold: 0.095
+      deal_price: "open"
+      open_cost: 0.0005
+      close_cost: 0.0015
+      min_cost: 5
+
+######################################################################
+# 6. LLM (for custom factor computation)
+######################################################################
+
+# Hard cap on process RSS (physical) memory. A background watchdog thread
+# polls /proc/self/statm every 5 s and sends SIGKILL if the limit is exceeded.
+# Set to null (or remove) to disable the watchdog.
+max_memory_gb: 40
+
+# Numeric precision for factor DataFrames.
+# float16: ~3.5 GB for 126 factors × 14 M rows — acts as implicit regularisation
+#          (quantisation of RANK/ZSCORE values into ~1500 discrete levels).
+# float32: ~7.1 GB — full single precision, useful as a comparison baseline.
+# Override at runtime with: FACTOR_PRECISION=float32 python -m quantaalpha.backtest...
+factor_precision: float16
+
+llm:
+  enabled: true
+  timeout: 300
+  max_retries: 3
+  cache_results: true
+  cache_dir: "data/results/factor_cache"
+  # Auto-extract cache from main program logs; set false to avoid scanning many experiment dirs
+  auto_extract_cache: false
+  debug: false
+
+######################################################################
+# 7. Factor calculation
+######################################################################
+
+factor_calculation:
+  output_dir: "data/results/computed_factors"
+  save_intermediate: true
+  n_jobs: 4
+  data_file: null  # When null, data is fetched from qlib
