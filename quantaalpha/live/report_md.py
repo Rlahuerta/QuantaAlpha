@@ -410,9 +410,8 @@ def generate_chain_report(
         date_str = day.get("date", f"day-{block_num}")
         account = float(day.get("account_value") or prev_account)
         daily_pnl = float(day.get("daily_pnl") or 0.0)
-        # Carry initial capital through if not set
-        init_cap = float(day.get("initial_capital") or initial_capital)
-        total_return = (account - init_cap) / init_cap if init_cap else 0.0
+        # total_return always references the fixed initial_capital (Day 0 baseline)
+        total_return = (account - initial_capital) / initial_capital if initial_capital else 0.0
 
         orders: List[Dict] = day.get("orders") or []
         target: Dict[str, int] = day.get("target_positions") or {}
@@ -447,7 +446,10 @@ def generate_chain_report(
 
         daily_ret = daily_pnl / (account - daily_pnl) if (account - daily_pnl) != 0 else 0.0
         excess_today = daily_ret - bench
-        cumulative_pnl = float(day.get("cumulative_pnl") or (cumulative_pnl + daily_pnl))
+        # Cumulative P&L is always account − initial_capital (gold standard).
+        # Never trust the stored "cumulative_pnl" field — it can be stale or
+        # incorrectly reset by the position tracker.
+        cumulative_pnl = account - initial_capital
         is_current = (block_num == len(days))
 
         # ── Block header ──────────────────────────────────────────────
