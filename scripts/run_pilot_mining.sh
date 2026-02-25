@@ -50,7 +50,7 @@ echo "🦁  Zoo CSV: ${ZOO_CSV} ($(wc -l < "${ZOO_CSV}") rows)"
 declare -A PILOTS
 PILOTS["pilot_glm5"]="glm-5:cloud"
 PILOTS["pilot_minimax"]="minimax-m2.5:cloud"
-PILOTS["pilot_qwen35"]="qwen3.5:cloud"
+PILOTS["pilot_qwen35"]="qwen3.5:397b"
 PILOTS["pilot_nemotron"]="nemotron-3-nano:30b-cloud"
 PILOTS["pilot_deepseek"]="deepseek-v3.2:cloud"
 
@@ -78,14 +78,16 @@ for SUFFIX in "${!PILOTS[@]}"; do
 
     CMD=(
         env
-        CHAT_MODEL="${CHAT_MODEL_FIXED}"
-        REASONING_MODEL="${REASONING}"
+        LLM_CHAT_MODEL="${CHAT_MODEL_FIXED}"
+        LLM_REASONING_MODEL="${REASONING}"
+        LLM_OPENAI_BASE_URL="${LLM_OPENAI_BASE_URL:-https://ollama.com/v1}"
+        LLM_OPENAI_API_KEY="${LLM_OPENAI_API_KEY:-}"
+        LLM_LOG_LLM_CHAT_CONTENT=false
         FACTOR_LIBRARY_SUFFIX="${SUFFIX}"
         FACTOR_CoSTEER_FACTOR_ZOO_PATH="${ZOO_CSV}"
         EXPERIMENT_ID="${EXP_ID}"
         WORKSPACE_PATH="${WS}"
         PICKLE_CACHE_FOLDER_PATH_STR="${PC}"
-        LOG_LLM_CHAT_CONTENT=false
         /home/hephaestus/anaconda3/envs/quantaalpha-ollama/bin/python3
             -m quantaalpha.cli mine
             --direction "${DIRECTION}"
@@ -95,7 +97,7 @@ for SUFFIX in "${!PILOTS[@]}"; do
 
     if $DRY_RUN; then
         echo "[DRY-RUN] ${SUFFIX}:"
-        echo "  REASONING_MODEL=${REASONING}"
+        echo "  LLM_REASONING_MODEL=${REASONING}"
         echo "  log → ${PILOT_LOG}"
         echo ""
         continue
