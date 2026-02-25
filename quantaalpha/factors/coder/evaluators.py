@@ -209,10 +209,9 @@ class FactorEvaluatorForCoder(CoSTEEREvaluator):
                 return factor_feedback
 
             # 1. Get factor execution feedback to generated implementation and remove the long list of numbers in execution feedback
-            (
-                execution_feedback,
-                gen_df,
-            ) = implementation.execute()
+            _exec_result = implementation.execute()
+            execution_feedback = _exec_result.feedback
+            gen_df = _exec_result.result
 
             execution_feedback = re.sub(r"(?<=\D)(,\s+-?\d+\.\d+){50,}(?=\D)", ", ", execution_feedback)
             factor_feedback.execution_feedback = "\n".join(

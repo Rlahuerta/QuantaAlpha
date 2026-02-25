@@ -50,7 +50,8 @@ class FactorEvaluator:
 
     def _get_df(self, gt_implementation: Workspace, implementation: Workspace):
         if gt_implementation is not None:
-            _, gt_df = gt_implementation.execute()
+            _gt_res = gt_implementation.execute()
+            gt_df = _gt_res.result
             if isinstance(gt_df, pd.Series):
                 gt_df = gt_df.to_frame("gt_factor")
             if isinstance(gt_df, pd.DataFrame):
@@ -58,9 +59,8 @@ class FactorEvaluator:
         else:
             gt_df = None
 
-        _, gen_df = implementation.execute()
-        if isinstance(gen_df, pd.Series):
-            gen_df = gen_df.to_frame("source_factor")
+        _gen_res = implementation.execute()
+        gen_df = _gen_res.result
         if isinstance(gen_df, pd.DataFrame):
             gen_df = gen_df.sort_index()
         return gt_df, gen_df
