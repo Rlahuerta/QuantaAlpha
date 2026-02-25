@@ -1,0 +1,91 @@
+# ============================================================
+# QuantaAlpha — Evolution run configuration
+# Extends experiment_pilot.yaml: evolution enabled (original → mutation → crossover)
+# Zoo seeded with pilot factor libraries to ensure new factors are discovered
+# ============================================================
+
+planning:
+  enabled: true
+  num_directions: 1
+  max_attempts: 5
+  use_llm: true
+  allow_fallback: true
+  prompt_file: planning_prompts.yaml
+
+execution:
+  max_loops: 5
+  steps_per_loop: 5
+  step_n: null
+  use_local: true
+  parallel_execution: false
+  max_parallel_workers: 1
+  branch_log_root: log
+  branch_log_prefix: branch
+
+evolution:
+  enabled: true
+
+  mutation_enabled: true
+  crossover_enabled: true
+
+  # Round 0=original, 1=mutation, 2=crossover
+  max_rounds: 3
+
+  crossover_size: 2
+  crossover_n: 2
+
+  # Sequential within each round (RAM-bounded: 5 runners in parallel externally)
+  parallel_enabled: false
+  max_parallel_workers: 1
+
+  prefer_diverse_crossover: true
+  prompt_file: evolution_prompts.yaml
+
+  # Boltzmann: explore early rounds, exploit later
+  parent_selection_strategy: boltzmann
+  top_percent_threshold: 0.3
+
+  fresh_start: true
+  cleanup_on_finish: false
+
+quality_gate:
+  consistency_enabled: false
+  complexity_enabled: true
+  redundancy_enabled: true
+  consistency_strict_mode: false
+  max_correction_attempts: 3
+  decay_filter_enabled: true
+  decay_horizon_days: 5
+  decay_ic_min: 0.0
+
+factor:
+  factors_per_hypothesis: 1
+  complexity:
+    symbol_length_threshold: 200
+    base_features_threshold: 5
+    free_args_ratio_threshold: 0.5
+  duplication:
+    enabled: true
+    threshold: 5
+    factor_zoo_path: null  # overridden by FACTOR_CoSTEER_FACTOR_ZOO_PATH env var
+
+backtest:
+  use_docker: false
+  timeout: 800
+  qlib:
+    config_name: conf_baseline.yaml
+
+llm:
+  factor_mining_timeout: 999999
+  max_retries: 3
+  retry_delay: 1.0
+  json_mode_strict: true
+
+logging:
+  level: INFO
+  save_snapshots: true
+  save_trajectory_pool: true
+
+prompts:
+  planning: planning_prompts.yaml
+  evolution: evolution_prompts.yaml
