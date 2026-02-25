@@ -259,7 +259,14 @@ class QlibFactorRunner(CachedRunner[QlibFactorExperiment]):
                 [(implementation.execute, ("All",)) for implementation in exp.sub_workspace_list],
                 n=RD_AGENT_SETTINGS.multi_proc_n,
             )
-            for idx, (message, df) in enumerate(message_and_df_list):
+            for idx, result in enumerate(message_and_df_list):
+                # result is a FactorExecutionResult(success, feedback, result, error)
+                from quantaalpha.factors.coder.factor import FactorExecutionResult
+                if isinstance(result, FactorExecutionResult):
+                    df = result.result
+                else:
+                    # Legacy tuple fallback: (message, df)
+                    _, df = result
                 # Check if factor generation was successful
                 if df is not None and "datetime" in df.index.names:
                     # Convert Series to DataFrame if needed
