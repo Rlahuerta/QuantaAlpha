@@ -61,6 +61,8 @@ class FactorEvaluator:
 
         _gen_res = implementation.execute()
         gen_df = _gen_res.result
+        if isinstance(gen_df, pd.Series):
+            gen_df = gen_df.to_frame(gen_df.name or "factor")
         if isinstance(gen_df, pd.DataFrame):
             gen_df = gen_df.sort_index()
         return gt_df, gen_df
