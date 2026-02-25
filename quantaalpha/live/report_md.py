@@ -723,17 +723,41 @@ def generate_chain_report(
                 key=lambda x: -x[1] * x[2]
             )[:topk]
 
-            A("| # | Ticker | Shares | Price | Position Value | Weight |")
-            A("|---|--------|--------|-------|----------------|--------|")
+            top_tickers = {t for t, _, _ in items}
+
+            def _pick_direction(ticker: str, target_sh: int) -> str:
+                """Compare target vs currently held shares → action label."""
+                held = portfolio.shares(ticker)   # 0 if not held
+                if held == 0:
+                    return "🟢 BUY NEW"
+                if target_sh > held:
+                    return "🔵 ADD"
+                if target_sh < held:
+                    return "🟡 REDUCE"
+                return "⚪ HOLD"
+
+            A("| # | Direction | Ticker | Target Shares | Held | Price | Value | Weight |")
+            A("|---|-----------|--------|---------------|------|-------|-------|--------|")
             for i, (t, sh, px) in enumerate(items, 1):
-                val = sh * px
-                wt = val / account * 100 if account else 0.0
-                A(f"| {i} | **{t}** | {sh:,} | {_usd(px)} | {_usd(val)} | {wt:.1f}% |")
+                val  = sh * px
+                wt   = val / account * 100 if account else 0.0
+                held = portfolio.shares(t)
+                held_str = f"{held:,}" if held else "—"
+                direction = _pick_direction(t, sh)
+                A(f"| {i} | {direction} | **{t}** | {sh:,} | {held_str} | "
+                  f"{_usd(px)} | {_usd(val)} | {wt:.1f}% |")
 
             total_top = sum(sh * px for _, sh, px in items)
-            A(f"| | | | **Top-{topk} total** | **{_usd(total_top)}** | "
+            A(f"| | | | **Top-{topk} total** | | | **{_usd(total_top)}** | "
               f"**{total_top/account*100 if account else 0:.0f}%** |")
             A("")
+
+            # Held tickers not in the new top-10 will be exited at next open
+            exits = [t for t in portfolio.tickers if t not in top_tickers]
+            if exits:
+                exit_str = "  ".join(f"`{t}`" for t in sorted(exits))
+                A(f"> 🔴 **Exiting at next open** ({len(exits)} position(s)): {exit_str}")
+                A("")
 
             if len(orders) > 0:
                 A(f"*{len(orders)} orders will execute at next market open to rebalance "
