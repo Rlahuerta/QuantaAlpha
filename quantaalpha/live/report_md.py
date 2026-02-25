@@ -24,16 +24,109 @@ Usage::
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
+# ── Portfolio tracker ─────────────────────────────────────────────────
+
+@dataclass
+class _Pos:
+    """One live position."""
+    shares: int
+    price:  float   # most-recent known price
+
+
+class Portfolio:
+    """Hard-capped position tracker — the single source of truth for what is held.
+
+    Rules enforced internally:
+      • Never holds more than ``topk`` distinct tickers.
+      • ADD (existing ticker) never consumes a slot.
+      • BUY NEW (new ticker) requires a free slot; returns CAP_BLOCKED if full.
+      • SELL ALL removes the ticker and frees the slot.
+      • REDUCE keeps the ticker; slot stays occupied.
+    """
+
+    def __init__(self, topk: int) -> None:
+        self.topk = topk
+        self._pos: Dict[str, _Pos] = {}
+
+    # ── read ──────────────────────────────────────────────────────────
+    def __contains__(self, ticker: str) -> bool:
+        return ticker in self._pos
+
+    def __len__(self) -> int:
+        return len(self._pos)
+
+    @property
+    def tickers(self) -> List[str]:
+        return list(self._pos.keys())
+
+    def shares(self, ticker: str) -> int:
+        return self._pos[ticker].shares if ticker in self._pos else 0
+
+    def price(self, ticker: str) -> float:
+        return self._pos[ticker].price if ticker in self._pos else 0.0
+
+    def free_slots(self) -> int:
+        return max(0, self.topk - len(self._pos))
+
+    def value(self) -> float:
+        return sum(p.shares * p.price for p in self._pos.values())
+
+    # ── write ─────────────────────────────────────────────────────────
+    def update_price(self, ticker: str, price: float) -> None:
+        if ticker in self._pos and price:
+            self._pos[ticker].price = price
+
+    def execute_sell(self, ticker: str, shares: int, price: float,
+                     in_target: bool) -> str:
+        """Process a sell order.
+
+        Returns one of:
+          ``'SELL_ALL'``    ticker fully exited — slot freed.
+          ``'REDUCE'``      shares reduced but ticker stays — slot kept.
+          ``'INVALID'``     ticker not held — no cash generated, ignored.
+        """
+        if ticker not in self._pos:
+            return "INVALID"
+        pos = self._pos[ticker]
+        if price:
+            pos.price = price
+        remaining = pos.shares - shares
+        if in_target and remaining > 0:
+            pos.shares = remaining
+            return "REDUCE"
+        del self._pos[ticker]
+        return "SELL_ALL"
+
+    def execute_buy(self, ticker: str, shares: int, price: float) -> str:
+        """Process a buy order.
+
+        Returns one of:
+          ``'ADD'``          shares added to existing position — no slot used.
+          ``'BUY_NEW'``      new position opened — slot consumed.
+          ``'CAP_BLOCKED'``  no free slots for a new ticker — order skipped.
+        """
+        if ticker in self._pos:
+            self._pos[ticker].shares += shares
+            if price:
+                self._pos[ticker].price = price
+            return "ADD"
+        if self.free_slots() == 0:
+            return "CAP_BLOCKED"
+        self._pos[ticker] = _Pos(shares=shares, price=price)
+        return "BUY_NEW"
+
+
 # ── Formatting helpers ────────────────────────────────────────────────
 
 def _usd(v: float, signed: bool = False) -> str:
-    prefix = "+" if signed and v >= 0 else ""
-    return f"{prefix}${v:,.2f}"
+    sign = ("+" if v >= 0 else "-") if signed else ("-" if v < 0 else "")
+    return f"{sign}${abs(v):,.2f}"
 
 
 def _pct(v: float, signed: bool = False) -> str:
@@ -308,8 +401,8 @@ def generate_chain_report(
 
     # Running account state across blocks
     prev_account = initial_capital
-    prev_cash = initial_capital           # all cash before any trades
-    prev_target: Dict[str, int] = {}      # no positions initially
+    prev_cash    = initial_capital
+    portfolio    = Portfolio(topk)   # single source of truth for held positions
     cumulative_pnl = 0.0
 
     # ── One block per day ─────────────────────────────────────────────
@@ -326,12 +419,14 @@ def generate_chain_report(
         # Enforce portfolio size cap: keep only the topk highest-weight positions
         if len(target) > topk:
             target = dict(sorted(target.items(), key=lambda kv: kv[1], reverse=True)[:topk])
-        prev_pos: Dict[str, int] = day.get("previous_positions") or prev_target
+        # portfolio is the single source of truth — never overridden from file
         prices: Dict[str, float] = dict(day.get("prices") or {})
         pos_pnl: Dict[str, Dict] = day.get("position_pnl") or {}
         bench = float(day.get("benchmark_return") or 0.0)
         cum_excess = float(day.get("cumulative_excess_return") or 0.0)
-        cash_eod = day.get("cash")  # may be None for older files
+        # NOTE: day.get("cash") is the *real* brokerage account cash for 22+ positions.
+        # Our simulation tracks only topk positions, so we never use it for cash
+        # accounting — cash is always derived from the waterfall chain.
 
         # Backfill prices from order dicts (always available)
         for o in orders:
@@ -339,6 +434,16 @@ def generate_chain_report(
             px = float(o.get("price") or 0.0)
             if t and px and t not in prices:
                 prices[t] = px
+
+        # Seed portfolio from file's previous_positions ONLY when the portfolio
+        # is still empty (first day of tracking). Once we have chain-tracked
+        # positions, the file's snapshot is ignored — portfolio is the truth.
+        if len(portfolio) == 0:
+            file_pp = day.get("previous_positions") or {}
+            if file_pp:
+                for t, sh in sorted(file_pp.items(),
+                                    key=lambda kv: kv[1], reverse=True)[:topk]:
+                    portfolio.execute_buy(t, int(sh), prices.get(t, 0.0))
 
         daily_ret = daily_pnl / (account - daily_pnl) if (account - daily_pnl) != 0 else 0.0
         excess_today = daily_ret - bench
@@ -361,8 +466,10 @@ def generate_chain_report(
           f"({_sign(total_return)}{total_return*100:.2f}% total return)*")
         A("")
 
-        # ── Overnight P&L attribution ─────────────────────────────────
-        if pos_pnl:
+        # ── Overnight P&L attribution (current day only) ──────────────
+        # Past blocks already capture the move in their account → account header;
+        # showing a full breakdown there adds noise without new information.
+        if is_current and pos_pnl:
             A("### 📊 Price Movements (overnight P&L attribution)")
             A("")
             A("| Ticker | Shares | Open | Close | Change | Day P&L |")
@@ -395,7 +502,7 @@ def generate_chain_report(
                 A(_pnl_row(ticker, info))
             A(f"| | | | | **TOTAL** | **{_sign(daily_pnl)}{_usd(daily_pnl)}** |")
             A("")
-        elif daily_pnl and prev_pos:
+        elif is_current and daily_pnl and portfolio.tickers:
             A(f"### 📊 Price Movements")
             A("")
             A(f"> Daily P&L: **{_sign(daily_pnl)}{_usd(daily_pnl)}** "
@@ -406,10 +513,6 @@ def generate_chain_report(
         sells = [o for o in orders if o.get("action") == "sell"]
         buys  = [o for o in orders if o.get("action") == "buy"]
 
-        # Split sells: valid = ticker actually held; invalid = no position → skip
-        valid_sells   = [o for o in sells if o.get("ticker", "") in prev_pos]
-        invalid_sells = [o for o in sells if o.get("ticker", "") not in prev_pos]
-
         # Holds = in target AND held AND NOT part of executed trades.
         # Use executed_tickers (filled below) rather than raw orders so that
         # infeasible buys and invalid sells don't mask held positions.
@@ -418,117 +521,129 @@ def generate_chain_report(
             A("### 💸 Orders & Cash Flow")
             A("")
 
-            # Sort valid sells largest-first, buys largest-first (by value)
             def _order_val(o: Dict) -> float:
                 t = o.get("ticker", "")
                 sh = abs(int(o.get("shares") or 0))
                 px = float(o.get("price") or prices.get(t, 0))
                 return sh * px
 
-            sells_sorted = sorted(valid_sells, key=_order_val, reverse=True)
-            buys_sorted  = sorted(buys,  key=_order_val, reverse=True)
-
-            # Pre-simulate valid sells → buys to classify each buy as
-            # feasible/infeasible. Prevents the waterfall from showing
-            # negative cash; infeasible buys collapse into a ⛔ note.
-            sim_cash = prev_cash
-            for o in sells_sorted:
-                sim_cash += _order_val(o)
-            feasible_buys: list = []
-            infeasible_buys: list = []
-            for o in buys_sorted:
-                val = _order_val(o)
-                if sim_cash >= val:
-                    feasible_buys.append(o)
-                    sim_cash -= val
-                else:
-                    infeasible_buys.append(o)
-
-            # Buy slots = space remaining under the topk cap.
-            # n_kept = target stocks ALREADY HELD (includes HOLD and REDUCE — both keep the ticker).
-            # Only SELL ALL removes a ticker; REDUCE keeps it.
-            # buy_slots applies only to BUY NEW (new ticker); ADD (existing ticker) never uses a slot.
-            n_kept = sum(1 for t in target if t in prev_pos)
-            buy_slots  = max(0, topk - n_kept)
-            # Split feasible buys: ADD (ticker already held, no slot needed) vs BUY NEW (needs a slot)
-            add_feasible = [o for o in feasible_buys if o.get("ticker", "") in prev_pos]
-            new_feasible = [o for o in feasible_buys if o.get("ticker", "") not in prev_pos]
-            buys_show  = add_feasible + new_feasible[:buy_slots]
-            buys_over  = new_feasible[buy_slots:]  # would breach topk cap → truly skipped
-
-            A("| Flow | Ticker | Shares | Price | Trade Value | Cash Balance |")
-            A("|------|--------|--------|-------|-------------|--------------|")
-
-            running_cash = prev_cash
-            A(f"| **Opening Cash** | — | — | — | — | **{_usd(running_cash)}** |")
-
             def _cash_flag(v: float) -> str:
-                """Return ⚠️ suffix when cash is negative or below reserve floor."""
                 if v < 0:
                     return " ⚠️"
                 if account and v < min_cash_pct * account:
                     return " ⚠️"
                 return ""
 
-            # SELLs first (generate cash) — always show all sells
+            sells_sorted = sorted(sells, key=_order_val, reverse=True)
+            buys_sorted  = sorted(buys,  key=_order_val, reverse=True)
+
+            # ── Pre-simulation: classify every order before rendering ──
+            # Pass 1 — sells: determine valid/invalid and post-sell cash/slots
+            sim_valid_sells:   list = []
+            sim_invalid_sells: list = []
+            sim_cash = prev_cash
+            sim_free = portfolio.free_slots()
+
             for o in sells_sorted:
-                t = o["ticker"]
+                t  = o.get("ticker", "")
+                sh = abs(int(o.get("shares") or 0))
+                px = float(o.get("price") or prices.get(t, 0))
+                if t not in portfolio:
+                    sim_invalid_sells.append(o)
+                    continue
+                sim_valid_sells.append(o)
+                sim_cash += sh * px
+                # SELL ALL (ticker not in new target) frees a slot
+                remaining = portfolio.shares(t) - sh
+                if not (t in target and remaining > 0):
+                    sim_free += 1
+
+            # Pass 2 — buys: classify against cash AND portfolio cap
+            sim_feasible:   list = []
+            sim_infeasible: list = []  # insufficient cash
+            sim_cap_blocked: list = []  # would exceed topk
+
+            for o in buys_sorted:
+                t   = o.get("ticker", "")
+                val = _order_val(o)
+                is_new = t not in portfolio
+                if is_new and sim_free == 0:
+                    sim_cap_blocked.append(o)
+                elif sim_cash < val:
+                    sim_infeasible.append(o)
+                else:
+                    sim_feasible.append(o)
+                    sim_cash -= val
+                    if is_new:
+                        sim_free -= 1
+
+            # ── Render waterfall ──────────────────────────────────────
+            A("| Flow | Ticker | Shares | Price | Trade Value | Cash Balance |")
+            A("|------|--------|--------|-------|-------------|--------------|")
+
+            running_cash = prev_cash
+            A(f"| **Opening Cash** | — | — | — | — | **{_usd(running_cash)}** |")
+
+            # Sells (generate cash) — execute on portfolio
+            executed_tickers: set = set()
+            for o in sim_valid_sells:
+                t  = o["ticker"]
                 sh = abs(int(o.get("shares") or 0))
                 px = float(o.get("price") or prices.get(t, 0))
                 val = sh * px
                 running_cash += val
-                in_target = t in target
-                icon = "🟡 REDUCE" if in_target else "🔴 SELL ALL"
+                result = portfolio.execute_sell(t, sh, px, t in target)
+                icon = "🟡 REDUCE" if result == "REDUCE" else "🔴 SELL ALL"
                 A(f"| {icon} | {t} | −{sh:,} | {_usd(px)} | "
                   f"+{_usd(val)} | {_usd(running_cash)}{_cash_flag(running_cash)} |")
+                executed_tickers.add(t)
 
-            # BUYs (consume cash) — only buys_show execute; buys_over are skipped (cap)
-            for o in buys_show:
-                t = o["ticker"]
+            # Buys (consume cash) — execute on portfolio
+            for o in sim_feasible:
+                t  = o["ticker"]
                 sh = abs(int(o.get("shares") or 0))
                 px = float(o.get("price") or prices.get(t, 0))
                 val = sh * px
                 running_cash -= val
-                is_new = t not in prev_pos
-                icon = "🟢 BUY NEW" if is_new else "🔵 ADD"
+                result = portfolio.execute_buy(t, sh, px)
+                icon = "🟢 BUY NEW" if result == "BUY_NEW" else "🔵 ADD"
                 A(f"| {icon} | {t} | +{sh:,} | {_usd(px)} | "
                   f"−{_usd(val)} | {_usd(running_cash)}{_cash_flag(running_cash)} |")
+                executed_tickers.add(t)
 
             closing_flag = _cash_flag(running_cash)
             A(f"| **Closing Cash** | — | — | — | — | "
               f"**{_usd(running_cash)}**{closing_flag} |")
             A("")
 
-            # Note: invalid sells (no prior position held) — skipped from cash
-            if invalid_sells:
-                total_inv = sum(_order_val(o) for o in invalid_sells)
-                inv_tks = ", ".join(o["ticker"] for o in invalid_sells[:8])
-                if len(invalid_sells) > 8:
-                    inv_tks += f" *(+{len(invalid_sells) - 8} more)*"
-                A(f"> ⛔ **{len(invalid_sells)} sell order(s) skipped** — no prior position held "
+            # ── Skip notes ────────────────────────────────────────────
+            if sim_invalid_sells:
+                total_inv = sum(_order_val(o) for o in sim_invalid_sells)
+                inv_tks   = ", ".join(o["ticker"] for o in sim_invalid_sells[:8])
+                if len(sim_invalid_sells) > 8:
+                    inv_tks += f" *(+{len(sim_invalid_sells) - 8} more)*"
+                A(f"> ⛔ **{len(sim_invalid_sells)} sell order(s) skipped** — not in portfolio "
                   f"({_usd(total_inv)} notional). Skipped: {inv_tks}")
                 A("")
 
-            # Note: infeasible buy orders (skipped to prevent negative cash)
-            if infeasible_buys:
-                total_skipped = sum(_order_val(o) for o in infeasible_buys)
-                sk_tickers = ", ".join(o["ticker"] for o in infeasible_buys[:8])
-                if len(infeasible_buys) > 8:
-                    sk_tickers += f" *(+{len(infeasible_buys) - 8} more)*"
-                A(f"> ⛔ **{len(infeasible_buys)} buy order(s) skipped** — insufficient cash "
-                  f"({_usd(total_skipped)} needed). Skipped: {sk_tickers}")
+            if sim_infeasible:
+                total_inf = sum(_order_val(o) for o in sim_infeasible)
+                inf_tks   = ", ".join(o["ticker"] for o in sim_infeasible[:8])
+                if len(sim_infeasible) > 8:
+                    inf_tks += f" *(+{len(sim_infeasible) - 8} more)*"
+                A(f"> ⛔ **{len(sim_infeasible)} buy order(s) skipped** — insufficient cash "
+                  f"({_usd(total_inf)} needed). Skipped: {inf_tks}")
                 A("")
 
-            # Note: buys skipped because they would exceed the topk portfolio cap
-            if buys_over:
-                over_tks = ", ".join(o["ticker"] for o in buys_over[:8])
-                if len(buys_over) > 8:
-                    over_tks += f" *(+{len(buys_over) - 8} more)*"
-                A(f"> ⛔ **{len(buys_over)} buy order(s) skipped** — portfolio cap ({topk} positions) reached. "
-                  f"Skipped: {over_tks}")
+            if sim_cap_blocked:
+                cap_tks = ", ".join(o["ticker"] for o in sim_cap_blocked[:8])
+                if len(sim_cap_blocked) > 8:
+                    cap_tks += f" *(+{len(sim_cap_blocked) - 8} more)*"
+                A(f"> ⛔ **{len(sim_cap_blocked)} buy order(s) skipped** — portfolio cap "
+                  f"({topk} positions) reached. Skipped: {cap_tks}")
                 A("")
 
-            # Warning banner when cash is still below floor after feasible trades
+            # Warning banner
             cash_floor = min_cash_pct * account if account else 0.0
             if running_cash < 0:
                 A(f"> ⚠️ **Cash alert**: Closing cash ({_usd(running_cash)}) is **negative** "
@@ -540,14 +655,13 @@ def generate_chain_report(
                   f"({_usd(cash_floor)}).")
                 A("")
 
-            # Holds = in target AND held AND NOT executed this block
-            executed_tickers = {o["ticker"] for o in sells_sorted + buys_show}
-            holds = [t for t in target if t in prev_pos and t not in executed_tickers]
-
+            # Holds = tickers still in portfolio that weren't explicitly traded today
+            holds = [t for t in portfolio.tickers if t not in executed_tickers]
             prev_cash = running_cash
+
         else:
-            # No trades — all held positions unchanged
-            holds = [t for t in target if t in prev_pos]
+            # No orders — portfolio unchanged
+            holds = list(portfolio.tickers)
             A("### 💸 Orders & Cash Flow")
             A("")
             A(f"> **No rebalancing orders.** All {len(holds)} positions held unchanged.")
@@ -555,29 +669,31 @@ def generate_chain_report(
             A("")
 
         if holds:
-            # Show only top-topk holds (by position value), collapse rest
             holds_sorted = sorted(
                 holds,
-                key=lambda t: target.get(t, 0) * prices.get(t, 0),
+                key=lambda t: portfolio.shares(t) * (prices.get(t) or portfolio.price(t)),
                 reverse=True,
             )
-            hold_show = holds_sorted[:topk]
-            hold_hide = holds_sorted[topk:]
-            hold_str = "  ".join(f"`{t}`" for t in hold_show)
-            suffix = (f"  *(+{len(hold_hide)} more: "
-                      + ", ".join(hold_hide) + ")*") if hold_hide else ""
-            A(f"⏸ **Hold** ({len(holds)} positions): {hold_str}{suffix}")
+            hold_str = "  ".join(f"`{t}`" for t in holds_sorted)
+            A(f"⏸ **Hold** ({len(holds)} positions): {hold_str}")
             A("")
 
         # ── End-of-day snapshot ───────────────────────────────────────
-        # Derive invested from target positions × prices
-        invested = sum(target.get(t, 0) * prices.get(t, 0) for t in target)
-        eod_cash = cash_eod if cash_eod is not None else (account - invested)
+        # Cash is ALWAYS the waterfall closing cash (prev_cash after any
+        # executed trades).  The file's cash field is the real brokerage
+        # account (22+ positions) and is never used here.
+        # Identity: account = invested + cash  →  invested = account − cash
+        eod_cash = prev_cash
+        invested = account - eod_cash
 
         # Cash reserve metrics
         cash_reserve_pct = eod_cash / account if account else 0.0
         reserve_ok = cash_reserve_pct >= min_cash_pct
         reserve_flag = "" if reserve_ok else " ⚠️"
+
+        # Return vs Day 0: (account − initial_capital) / initial_capital
+        return_vs_d0 = (account - initial_capital) / initial_capital if initial_capital else 0.0
+        return_flag  = "📈" if return_vs_d0 >= 0 else "📉"
 
         A("### 🔒 End of Day")
         A("")
@@ -587,8 +703,9 @@ def generate_chain_report(
         A(f"| Cash | {_usd(eod_cash)}{reserve_flag} |")
         A(f"| Cash Reserve | {cash_reserve_pct*100:.1f}%{reserve_flag} |")
         A(f"| **Total Account** | **{_usd(account)}** |")
+        A(f"| vs Day 0 ($1M) | {return_flag} **{_pct(return_vs_d0, signed=True)}** ({_usd(account - initial_capital, signed=True)}) |")
         A(f"| Cumulative P&L | {_sign(cumulative_pnl)}{_usd(cumulative_pnl)} |")
-        A(f"| Positions | {len(target)} |")
+        A(f"| Positions | {len(portfolio)} |")
         A("")
 
         # ── Current day: algorithm's top-N picks ──────────────────────
@@ -628,19 +745,12 @@ def generate_chain_report(
 
         # Advance running state for next block
         prev_account = account
-        prev_target = dict(target)
 
-        # Anchor next block's opening cash to actual account state.
-        # Use current-day prices as a proxy for today's closing prices
-        # to estimate the cash = account - portfolio_value.
-        # This prevents compounding errors (e.g. reset days or data gaps).
-        if cash_eod is not None:
-            # Authoritative cash field present (newer files)
-            prev_cash = float(cash_eod)
-        elif prices:
-            estimated_port = sum(target.get(t, 0) * prices.get(t, 0) for t in target)
-            prev_cash = account - estimated_port
-        # else: keep prev_cash as computed from the order waterfall
+        # Update portfolio prices from today's data (for value estimates)
+        for t, px in prices.items():
+            portfolio.update_price(t, px)
+        # prev_cash carries naturally from waterfall — no override needed.
+        # Cash never changes from price movements, only from executed trades.
 
     # ── Summary table ─────────────────────────────────────────────────
     if days:

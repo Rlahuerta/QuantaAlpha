@@ -362,7 +362,7 @@ def test_invalid_sell_skipped_no_position():
     }
     md = generate_chain_report([day], initial_capital=1_000_000.0, topk=10)
     assert "sell order(s) skipped" in md
-    assert "no prior position held" in md
+    assert "not in portfolio" in md
     assert "NOTOWNED" in md
     # The sell should NOT generate cash in the waterfall
     # Opening $1M, only the valid buy executes: $1M - $10k = $990k closing
