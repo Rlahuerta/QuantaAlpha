@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 import quantaalpha.factors.coder.eva_utils as eva_utils_module
+from quantaalpha.factors.coder.factor import FactorExecutionResult
 from quantaalpha.factors.coder.eva_utils import (
     FactorCodeEvaluator,
     FactorCorrelationEvaluator,
@@ -29,7 +30,8 @@ class DummyWorkspace:
         self.target_task = None
 
     def execute(self):
-        return None, self._df
+        success = self._df is not None
+        return FactorExecutionResult(success=success, feedback="ok", result=self._df)
 
 
 class DummyWorkspaceNone(DummyWorkspace):
@@ -168,12 +170,13 @@ def test_factor_evaluator_base_paths_and_series_conversion():
         [pd.date_range("2024-01-01", periods=2), ["AAA"]],
         names=["datetime", "instrument"],
     )
-    src = DummyWorkspace(pd.Series([1.0, 2.0], index=idx))
+    src = DummyWorkspace(pd.Series([1.0, 2.0], index=idx, name="my_factor"))
     gt = DummyWorkspace(pd.Series([1.0, 2.0], index=idx))
     gt_df, gen_df = evaluator._get_df(gt, src)
 
     assert list(gt_df.columns) == ["gt_factor"]
-    assert list(gen_df.columns) == ["source_factor"]
+    # gen_df: unnamed Series → column "factor"; named Series → uses series name
+    assert list(gen_df.columns) == ["my_factor"]
     assert str(evaluator) == "_BaseEvaluator"
 
 
